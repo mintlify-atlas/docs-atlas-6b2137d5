@@ -1,0 +1,110 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Engineering Knowledge Graph",
+  "projectDescription": "A platform that unifies engineering knowledge across code, infrastructure, and operations into a queryable graph database with natural language interface.",
+  "theme": "aspen",
+  "primaryColor": "#2563eb",
+  "lightColor": "#3b82f6",
+  "darkColor": "#1e40af",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/knowledge-graph",
+              "concepts/connectors",
+              "concepts/query-engine",
+              "concepts/natural-language"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/installation",
+              "guides/configuration",
+              "guides/data-sources",
+              "guides/querying",
+              "guides/custom-connectors"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/deployment",
+              "operations/monitoring",
+              "operations/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "REST API",
+            "pages": [
+              "api/overview",
+              "api/query",
+              "api/entities",
+              "api/reload",
+              "api/health"
+            ]
+          },
+          {
+            "group": "Query Engine",
+            "pages": [
+              "api/query-engine/overview",
+              "api/query-engine/downstream",
+              "api/query-engine/upstream",
+              "api/query-engine/blast-radius",
+              "api/query-engine/path",
+              "api/query-engine/ownership"
+            ]
+          },
+          {
+            "group": "Connectors",
+            "pages": [
+              "api/connectors/base-connector",
+              "api/connectors/docker-compose",
+              "api/connectors/kubernetes",
+              "api/connectors/teams"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Neo4j-based knowledge graph for infrastructure relationships",
+    "Natural language queries via Google Gemini LLM",
+    "Pluggable connectors for Docker Compose, Kubernetes, and Teams",
+    "Impact analysis with blast radius calculations",
+    "Graph traversal for upstream and downstream dependencies",
+    "Team ownership tracking and asset management"
+  ],
+  "publicApiSurface": [
+    "POST /api/query - Process natural language queries",
+    "GET /api/entities - Get available entities for autocomplete",
+    "POST /api/reload - Reload configuration data",
+    "GET /api/health - System health check",
+    "QueryEngine.downstream() - Get transitive dependencies",
+    "QueryEngine.upstream() - Get transitive dependents",
+    "QueryEngine.blast_radius() - Full impact analysis",
+    "QueryEngine.path() - Find shortest path between nodes",
+    "QueryEngine.get_owner() - Find team ownership",
+    "QueryEngine.get_team_assets() - Get team-owned assets",
+    "BaseConnector.parse() - Parse configuration files",
+    "GeminiLLM.parse_query_intent() - Parse natural language to structured queries"
+  ]
+}
