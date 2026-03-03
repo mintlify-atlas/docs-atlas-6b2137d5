@@ -1,0 +1,513 @@
+---
+title: Data Sources Guide
+description: Configure and manage data sources for the Engineering Knowledge Graph
+---
+
+The Engineering Knowledge Graph uses **connectors** to parse configuration files from various sources and build the knowledge graph. This guide covers how to set up and manage data sources.
+
+## Overview
+
+EKG supports three built-in connectors:
+
+- **Docker Compose Connector**: Parses `docker-compose.yml` files for service definitions
+- **Teams Connector**: Parses `teams.yaml` files for team ownership
+- **Kubernetes Connector**: Parses Kubernetes deployment YAML files
+
+All connectors inherit from `BaseConnector` and return standardized `Node` and `Edge` objects.
+
+## Docker Compose Data Source
+
+The Docker Compose connector extracts services, dependencies, and environment variables from `docker-compose.yml` files.
+
+### Setting Up Docker Compose Data
+
+<Steps>
+  <Step title="Create data directory">
+    Ensure you have a `data/` directory in your project root:
+    
+    ```bash
+    mkdir -p data
+    ```
+  </Step>
+
+  <Step title="Add docker-compose.yml">
+    Create or copy your `docker-compose.yml` file to `data/docker-compose.yml`:
+    
+    ```bash
+    cp your-docker-compose.yml data/docker-compose.yml
+    ```
+  </Step>
+
+  <Step title="Reload data">
+    The system automatically loads data on startup. To reload without restarting:
+    
+    ```bash
+    curl -X POST http://localhost:8000/api/reload
+    ```
+  </Step>
+</Steps>
+
+### Docker Compose Format
+
+The connector parses standard Docker Compose v3.8+ format:
+
+<CodeGroup>
+```yaml data/docker-compose.yml
+version: '3.8'
+
+services:
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:8081
+      - ORDER_SERVICE_URL=http://order-service:8082
+      - PAYMENT_SERVICE_URL=http://payment-service:8083
+    depends_on:
+      - auth-service
+      - order-service
+    labels:
+      team: platform-team
+      oncall: "@alice"
+
+  auth-service:
+    build: ./services/auth-service
+    ports:
+      - "8081:8081"
+    environment:
+      - DATABASE_URL=postgresql://postgres:secret@users-db:5432/users
+      - REDIS_URL=redis://redis-main:6379
+    depends_on:
+      - users-db
+      - redis-main
+    labels:
+      team: identity-team
+      oncall: "@bob"
+
+  users-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=users
+      - POSTGRES_PASSWORD=secret
+    labels:
+      team: identity-team
+      type: database
+
+  redis-main:
+    image: redis:7-alpine
+    labels:
+      team: platform-team
+      type: cache
+```
+</CodeGroup>
+
+### Extracted Information
+
+The Docker Compose connector extracts:
+
+| Field | Description | Graph Element |
+|-------|-------------|--------------|
+| Service name | Unique identifier | Node ID: `service:api-gateway` |
+| `depends_on` | Explicit dependencies | Edge: `DEPENDS_ON` |
+| `environment` URLs | Service-to-service calls | Edge: `CALLS` |
+| `environment` DB URLs | Database connections | Edge: `USES` |
+| `labels.team` | Team ownership | Property on node |
+| `labels.oncall` | Oncall contact | Property on node |
+| `labels.type` | Node type override | Node type |
+| `ports` | Exposed ports | Property on node |
+| `image` | Docker image | Property on node |
+
+### Dependency Detection
+
+The connector intelligently detects dependencies from environment variables:
+
+<CodeGroup>
+```python connectors/docker_compose.py
+def _extract_service_dependencies_from_env(self, env_vars: Dict[str, str]) -> List[str]:
+    """Extract service dependencies from environment variables."""
+    dependencies = []
+    
+    for key, value in env_vars.items():
+        if key.endswith('_URL') or key.endswith('_SERVICE_URL'):
+            # Extract service name from URL like http://payment-service:8083
+            if '://' in value:
+                url_part = value.split('://')[1]
+                if ':' in url_part:
+                    service_name = url_part.split(':')[0]
+                    dependencies.append(service_name)
+    
+    return dependencies
+```
+</CodeGroup>
+
+**Examples:**
+- `AUTH_SERVICE_URL=http://auth-service:8081` → Creates `CALLS` edge to `auth-service`
+- `DATABASE_URL=postgresql://user@orders-db:5432/db` → Creates `USES` edge to `orders-db`
+- `REDIS_URL=redis://redis-main:6379` → Creates `USES` edge to `redis-main`
+
+## Teams Data Source
+
+The Teams connector parses team ownership and contact information from YAML files.
+
+### Setting Up Teams Data
+
+<Steps>
+  <Step title="Create teams.yaml">
+    Create a `teams.yaml` file in the `data/` directory:
+    
+    ```bash
+    touch data/teams.yaml
+    ```
+  </Step>
+
+  <Step title="Define teams">
+    Add team definitions with ownership information:
+    
+    <CodeGroup>
+    ```yaml data/teams.yaml
+    teams:
+      - name: platform-team
+        lead: Alice Chen
+        slack_channel: "#platform"
+        pagerduty_schedule: "platform-oncall"
+        owns:
+          - api-gateway
+          - notification-service
+          - redis-main
+      
+      - name: identity-team
+        lead: Bob Smith
+        slack_channel: "#identity"
+        pagerduty_schedule: "identity-oncall"
+        owns:
+          - auth-service
+          - users-db
+      
+      - name: orders-team
+        lead: David Lee
+        slack_channel: "#orders"
+        owns:
+          - order-service
+          - inventory-service
+          - orders-db
+          - inventory-db
+      
+      - name: payments-team
+        lead: Frank Wilson
+        slack_channel: "#payments"
+        pagerduty_schedule: "payments-oncall"
+        owns:
+          - payment-service
+          - payments-db
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Reload data">
+    Reload the configuration to apply changes:
+    
+    ```bash
+    curl -X POST http://localhost:8000/api/reload
+    ```
+  </Step>
+</Steps>
+
+### Teams Format
+
+The teams connector supports these fields:
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|----------|
+| `name` | Yes | Unique team identifier | `platform-team` |
+| `lead` | No | Team lead name | `Alice Chen` |
+| `slack_channel` | No | Slack channel for team | `#platform` |
+| `pagerduty_schedule` | No | PagerDuty schedule ID | `platform-oncall` |
+| `owns` | Yes | List of owned services/databases | `[api-gateway, redis-main]` |
+
+### Ownership Relationships
+
+The connector creates `OWNS` edges from teams to their assets:
+
+<CodeGroup>
+```python connectors/teams.py
+def parse(self, file_path: str) -> tuple[List[Node], List[Edge]]:
+    """Parse teams.yaml file."""
+    teams = teams_data.get('teams', [])
+    
+    for team_config in teams:
+        team_name = team_config.get('name')
+        
+        # Create team node
+        team_node = self._create_team_node(team_config)
+        nodes.append(team_node)
+        
+        # Create ownership edges
+        owned_services = team_config.get('owns', [])
+        for service_name in owned_services:
+            # Infer service type from name
+            service_type = self._infer_service_type(service_name)
+            
+            edge = self._create_edge(
+                'owns',
+                team_node.id,  # team:platform-team
+                f"{service_type}:{service_name}"  # service:api-gateway
+            )
+            edges.append(edge)
+```
+</CodeGroup>
+
+<Note>
+  The connector automatically infers node types from names. Services ending in `-db` or containing `database` are typed as `database`, names containing `redis` or `cache` are typed as `cache`, and everything else is typed as `service`.
+</Note>
+
+## Kubernetes Data Source
+
+The Kubernetes connector parses Kubernetes deployment manifests for additional context.
+
+### Setting Up Kubernetes Data
+
+<Steps>
+  <Step title="Export Kubernetes configurations">
+    Export your deployments to a YAML file:
+    
+    ```bash
+    kubectl get deployments -o yaml > data/k8s-deployments.yaml
+    ```
+  </Step>
+
+  <Step title="Or create manually">
+    Create a deployment manifest manually:
+    
+    <CodeGroup>
+    ```yaml data/k8s-deployments.yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: api-gateway
+      labels:
+        app: api-gateway
+        team: platform-team
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: api-gateway
+      template:
+        metadata:
+          labels:
+            app: api-gateway
+        spec:
+          containers:
+          - name: api-gateway
+            image: api-gateway:v1.2.3
+            ports:
+            - containerPort: 8080
+            env:
+            - name: AUTH_SERVICE_URL
+              value: "http://auth-service:8081"
+            - name: ORDER_SERVICE_URL
+              value: "http://order-service:8082"
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: auth-service
+      labels:
+        app: auth-service
+        team: identity-team
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: auth-service
+      template:
+        spec:
+          containers:
+          - name: auth-service
+            image: auth-service:v2.1.0
+            env:
+            - name: DATABASE_URL
+              value: "postgresql://user@users-db:5432/users"
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Reload configuration">
+    ```bash
+    curl -X POST http://localhost:8000/api/reload
+    ```
+  </Step>
+</Steps>
+
+### Kubernetes Format
+
+The connector extracts information from standard Kubernetes manifests:
+
+- **Deployment name**: Used as service identifier
+- **Labels**: Team ownership and metadata
+- **Container environment**: Service dependencies
+- **Image tags**: Version information
+- **Replicas**: Scaling configuration
+
+## Data Loading Process
+
+The system loads data on startup and when the reload API is called:
+
+<CodeGroup>
+```python chat/app.py
+async def load_configuration_data():
+    """Load and parse configuration files into the graph."""
+    logger.info("Loading configuration data...")
+    
+    # Clear existing data
+    storage.clear_graph()
+    
+    data_dir = Path("data")
+    all_nodes = []
+    all_edges = []
+    
+    # Load Docker Compose data
+    docker_compose_file = data_dir / "docker-compose.yml"
+    if docker_compose_file.exists():
+        connector = DockerComposeConnector()
+        nodes, edges = connector.parse(str(docker_compose_file))
+        all_nodes.extend(nodes)
+        all_edges.extend(edges)
+        logger.info(f"Loaded {len(nodes)} nodes and {len(edges)} edges from Docker Compose")
+    
+    # Load Teams data
+    teams_file = data_dir / "teams.yaml"
+    if teams_file.exists():
+        connector = TeamsConnector()
+        nodes, edges = connector.parse(str(teams_file))
+        all_nodes.extend(nodes)
+        all_edges.extend(edges)
+        logger.info(f"Loaded {len(nodes)} nodes and {len(edges)} edges from Teams")
+    
+    # Load Kubernetes data (optional)
+    k8s_file = data_dir / "k8s-deployments.yaml"
+    if k8s_file.exists():
+        connector = KubernetesConnector()
+        nodes, edges = connector.parse(str(k8s_file))
+        all_nodes.extend(nodes)
+        all_edges.extend(edges)
+        logger.info(f"Loaded {len(nodes)} nodes and {len(edges)} edges from Kubernetes")
+    
+    # Store all data in graph
+    storage.add_nodes(all_nodes)
+    storage.add_edges(all_edges)
+    
+    logger.info(f"Total loaded: {len(all_nodes)} nodes and {len(all_edges)} edges")
+```
+</CodeGroup>
+
+## Data Validation
+
+Validate your configuration files before loading:
+
+<CodeGroup>
+```bash Validate All Files
+python scripts/validate_config.py
+```
+</CodeGroup>
+
+The validator checks:
+- YAML syntax is valid
+- Required fields are present
+- Service names are consistent across files
+- Team ownership is defined
+- No circular dependencies
+
+## Reloading Data
+
+You can reload data without restarting the application:
+
+<CodeGroup>
+```bash API Reload
+curl -X POST http://localhost:8000/api/reload
+```
+
+```json Response
+{
+  "message": "Data reloaded successfully"
+}
+```
+</CodeGroup>
+
+<Warning>
+  Reloading data clears the entire graph and rebuilds it from scratch. This operation may take a few seconds for large datasets.
+</Warning>
+
+## Best Practices
+
+<Steps>
+  <Step title="Keep data files in version control">
+    Store your configuration files in Git to track changes:
+    
+    ```bash
+    git add data/docker-compose.yml data/teams.yaml
+    git commit -m "Update service dependencies"
+    ```
+  </Step>
+
+  <Step title="Use consistent naming">
+    Ensure service names match across all configuration files:
+    
+    - Docker Compose: `api-gateway`
+    - Teams YAML: `api-gateway` (in `owns` list)
+    - Kubernetes: `api-gateway` (in deployment name)
+  </Step>
+
+  <Step title="Document team ownership">
+    Always specify team ownership using labels:
+    
+    ```yaml
+    labels:
+      team: platform-team
+      oncall: "@alice"
+    ```
+  </Step>
+
+  <Step title="Validate before deploying">
+    Run validation before committing changes:
+    
+    ```bash
+    python scripts/validate_config.py && git commit
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Data Not Appearing in Graph
+
+If your data isn't showing up:
+
+1. Check file paths: Files must be in the `data/` directory
+2. Validate YAML syntax: `yamllint data/*.yaml`
+3. Check logs: `docker-compose logs ekg-app | grep ERROR`
+4. Reload data: `curl -X POST http://localhost:8000/api/reload`
+
+### Duplicate Nodes
+
+If you see duplicate nodes with the same name:
+
+1. Ensure node IDs are consistent (format: `type:name`)
+2. Check for naming inconsistencies across files
+3. Use the same connector for the same data source
+
+### Missing Relationships
+
+If edges aren't created:
+
+1. Verify service names match exactly
+2. Check environment variable format (must contain URLs)
+3. Ensure target services exist as nodes
+4. Review connector logs for parsing errors
+
+## Next Steps
+
+- [Query your knowledge graph](/guides/querying) to explore the data
+- [Create custom connectors](/guides/custom-connectors) for additional data sources
+- [Configure environment variables](/guides/configuration) for different environments

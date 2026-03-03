@@ -1,0 +1,379 @@
+---
+title: 'Knowledge Graph'
+description: 'Understanding the graph data model, nodes, edges, and Neo4j storage'
+keywords: ['knowledge graph', 'neo4j', 'graph database', 'nodes', 'edges', 'data model']
+icon: 'network-wired'
+---
+
+## Overview
+
+The Engineering Knowledge Graph (EKG) uses a **graph data model** to represent your engineering infrastructure as interconnected nodes and relationships. This model provides a natural way to understand complex dependencies, ownership, and impact analysis across your services, databases, teams, and deployments.
+
+## Graph Data Model
+
+The knowledge graph consists of two fundamental building blocks:
+
+<CardGroup cols={2}>
+  <Card title="Nodes" icon="circle-dot">
+    Represent entities in your infrastructure (services, databases, teams, etc.)
+  </Card>
+  <Card title="Edges" icon="arrow-right-arrow-left">
+    Represent relationships between nodes (calls, owns, uses, depends_on)
+  </Card>
+</CardGroup>
+
+### Node Structure
+
+Nodes are defined using the `Node` class in `connectors/base.py:13-18`:
+
+```python connectors/base.py
+class Node(BaseModel):
+    """Represents a node in the knowledge graph."""
+    id: str
+    type: str
+    name: str
+    properties: Dict[str, Any] = {}
+```
+
+<AccordionGroup>
+  <Accordion title="Node Properties">
+    - **id**: Unique identifier in format `type:name` (e.g., `service:payment-service`)
+    - **type**: Node classification (service, database, cache, team, deployment)
+    - **name**: Human-readable name
+    - **properties**: Flexible dictionary for additional metadata (team, port, image, etc.)
+  </Accordion>
+</AccordionGroup>
+
+### Edge Structure
+
+Edges connect nodes and represent relationships defined in `connectors/base.py:21-27`:
+
+```python connectors/base.py
+class Edge(BaseModel):
+    """Represents an edge in the knowledge graph."""
+    id: str
+    type: str
+    source: str
+    target: str
+    properties: Dict[str, Any] = {}
+```
+
+<AccordionGroup>
+  <Accordion title="Edge Properties">
+    - **id**: Unique identifier in format `edge:source-type-target`
+    - **type**: Relationship classification (calls, owns, uses, depends_on, exposes)
+    - **source**: Source node ID
+    - **target**: Target node ID
+    - **properties**: Flexible dictionary for relationship metadata
+  </Accordion>
+</AccordionGroup>
+
+## Node Types
+
+The knowledge graph supports several node types, each representing different infrastructure entities:
+
+<Tabs>
+  <Tab title="Service">
+    Represents microservices, APIs, or application components.
+    
+    **Common Properties:**
+    - `team`: Owning team name
+    - `port`: Exposed port number
+    - `image`: Docker/container image
+    - `oncall`: On-call contact
+    
+    **Example:**
+    ```json
+    {
+      "id": "service:payment-service",
+      "type": "service",
+      "name": "payment-service",
+      "properties": {
+        "team": "payments",
+        "port": 8083,
+        "image": "payment-service:latest"
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Database">
+    Represents SQL or NoSQL databases.
+    
+    **Common Properties:**
+    - `image`: Database engine image
+    - `port`: Database port
+    - `team`: Owning team
+    
+    **Example:**
+    ```json
+    {
+      "id": "database:users-db",
+      "type": "database",
+      "name": "users-db",
+      "properties": {
+        "image": "postgres:14",
+        "port": 5432
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Cache">
+    Represents caching layers like Redis or Memcached.
+    
+    **Common Properties:**
+    - `image`: Cache engine image
+    - `port`: Cache port
+    
+    **Example:**
+    ```json
+    {
+      "id": "cache:redis-main",
+      "type": "cache",
+      "name": "redis-main",
+      "properties": {
+        "image": "redis:7",
+        "port": 6379
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Team">
+    Represents engineering teams that own and maintain infrastructure.
+    
+    **Common Properties:**
+    - `lead`: Team lead name
+    - `slack_channel`: Slack channel for team
+    - `pagerduty_schedule`: PagerDuty schedule ID
+    
+    **Example:**
+    ```json
+    {
+      "id": "team:payments",
+      "type": "team",
+      "name": "payments",
+      "properties": {
+        "lead": "Alice Smith",
+        "slack_channel": "#team-payments"
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Deployment">
+    Represents Kubernetes deployments or similar orchestrated workloads.
+    
+    **Common Properties:**
+    - `namespace`: Kubernetes namespace
+    - `replicas`: Number of replicas
+    - `image`: Container image
+    - `resources`: Resource requests/limits
+    
+    **Example:**
+    ```json
+    {
+      "id": "deployment:payment-service",
+      "type": "deployment",
+      "name": "payment-service",
+      "properties": {
+        "namespace": "production",
+        "replicas": 3,
+        "image": "payment-service:v1.2.3"
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Edge Types
+
+Relationships between nodes are classified by their semantic meaning:
+
+| Edge Type | Description | Example |
+|-----------|-------------|--------|
+| **CALLS** | Service-to-service communication | `service:api` → `service:payment-service` |
+| **USES** | Service using a database or cache | `service:api` → `database:users-db` |
+| **DEPENDS_ON** | Explicit dependency declaration | `service:frontend` → `service:api` |
+| **OWNS** | Team ownership of an asset | `team:payments` → `service:payment-service` |
+| **EXPOSES** | Service exposing a deployment | `service:payment-service` → `deployment:payment-service` |
+
+<Note>
+Edge types are stored in uppercase in Neo4j (e.g., `CALLS`, `USES`) but can be specified in lowercase when querying.
+</Note>
+
+## Neo4j Storage Layer
+
+The knowledge graph is persisted in **Neo4j**, a native graph database optimized for traversals and relationship queries.
+
+### GraphStorage Class
+
+The `GraphStorage` class (`graph/storage.py:14`) provides the storage abstraction:
+
+```python graph/storage.py
+class GraphStorage:
+    """Neo4j-based graph storage implementation."""
+    
+    def __init__(self, uri: str = None, user: str = None, password: str = None):
+        """Initialize Neo4j connection."""
+        self.uri = uri or os.getenv('NEO4J_URI', 'bolt://localhost:7687')
+        self.user = user or os.getenv('NEO4J_USER', 'neo4j')
+        self.password = password or os.getenv('NEO4J_PASSWORD', 'password')
+        
+        self.driver: Optional[Driver] = None
+        self._connect()
+```
+
+### Key Storage Operations
+
+<Steps>
+  <Step title="Adding Nodes">
+    Nodes are added using `MERGE` to support upsert behavior:
+    
+    ```python graph/storage.py
+    def add_node(self, node: Node):
+        """Add or update a node in the graph."""
+        query = """
+        MERGE (n {id: $id})
+        SET n.type = $type,
+            n.name = $name,
+            n += $properties
+        RETURN n
+        """
+        session.run(query, {
+            'id': node.id,
+            'type': node.type,
+            'name': node.name,
+            'properties': node.properties
+        })
+    ```
+  </Step>
+  
+  <Step title="Adding Edges">
+    Edges ensure both endpoint nodes exist before creating the relationship:
+    
+    ```python graph/storage.py
+    def add_edge(self, edge: Edge):
+        """Add or update an edge in the graph."""
+        # First ensure both nodes exist
+        session.run("MERGE (n {id: $id})", {'id': edge.source})
+        session.run("MERGE (n {id: $id})", {'id': edge.target})
+        
+        # Create relationship with dynamic type
+        query = f"""
+        MATCH (source {{id: $source}})
+        MATCH (target {{id: $target}})
+        MERGE (source)-[r:{edge.type.upper()}]->(target)
+        SET r += $properties
+        RETURN r
+        """
+    ```
+  </Step>
+  
+  <Step title="Querying Nodes">
+    Retrieve nodes by type and filters:
+    
+    ```python graph/storage.py
+    def get_nodes(self, node_type: str = None, filters: Dict[str, Any] = None):
+        """Retrieve nodes by type and optional filters."""
+        query = "MATCH (n)"
+        params = {}
+        
+        conditions = []
+        if node_type:
+            conditions.append("n.type = $type")
+            params['type'] = node_type
+        
+        if filters:
+            for key, value in filters.items():
+                param_name = f"filter_{key}"
+                conditions.append(f"n.{key} = ${param_name}")
+                params[param_name] = value
+        
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        
+        query += " RETURN n"
+    ```
+  </Step>
+</Steps>
+
+### Cypher Query Execution
+
+For advanced queries, you can execute custom Cypher directly (`graph/storage.py:175`):
+
+```python graph/storage.py
+def execute_cypher(self, query: str, parameters: Dict[str, Any] = None):
+    """Execute a custom Cypher query."""
+    with self.driver.session() as session:
+        result = session.run(query, parameters or {})
+        return [dict(record) for record in result]
+```
+
+## Graph Initialization
+
+The system initializes the graph in `main.py:78-149` by:
+
+<Steps>
+  <Step title="Connect to Neo4j">
+    Establish connection to Neo4j database using environment variables.
+  </Step>
+  
+  <Step title="Load Connectors">
+    Initialize connectors for Docker Compose, Teams, and Kubernetes configurations.
+  </Step>
+  
+  <Step title="Parse Configuration Files">
+    Each connector parses its respective configuration files to extract nodes and edges.
+  </Step>
+  
+  <Step title="Populate Graph">
+    Clear existing graph and load all parsed nodes and edges into Neo4j.
+  </Step>
+</Steps>
+
+```python main.py
+# Load Docker Compose
+connector = DockerComposeConnector()
+nodes, edges = connector.parse(str(docker_compose_file))
+all_nodes.extend(nodes)
+all_edges.extend(edges)
+
+# Clear and populate graph
+storage.clear_graph()
+storage.add_nodes(all_nodes)
+storage.add_edges(all_edges)
+```
+
+## Why Graph Databases?
+
+<CardGroup cols={2}>
+  <Card title="Natural Relationships" icon="diagram-project">
+    Graph databases natively model relationships without complex JOINs or denormalization.
+  </Card>
+  
+  <Card title="Fast Traversals" icon="bolt">
+    Neo4j optimizes for graph traversals, making dependency analysis and pathfinding efficient.
+  </Card>
+  
+  <Card title="Flexible Schema" icon="shapes">
+    Add new node types, edge types, and properties without schema migrations.
+  </Card>
+  
+  <Card title="Query Language" icon="code">
+    Cypher provides an intuitive, SQL-like language designed specifically for graphs.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Connectors" icon="plug" href="/concepts/connectors">
+    Learn how connectors parse configuration files into graph data.
+  </Card>
+  
+  <Card title="Query Engine" icon="magnifying-glass" href="/concepts/query-engine">
+    Explore powerful graph traversal and analysis capabilities.
+  </Card>
+</CardGroup>

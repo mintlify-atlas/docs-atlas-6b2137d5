@@ -1,0 +1,314 @@
+---
+title: "DockerComposeConnector"
+description: "Connector for parsing Docker Compose YAML files into knowledge graph nodes and edges"
+---
+
+## Overview
+
+The `DockerComposeConnector` parses `docker-compose.yml` files and extracts services, dependencies, and relationships to build an engineering knowledge graph. It identifies service-to-service communication, database dependencies, and team ownership from Docker Compose configurations.
+
+## Class Definition
+
+```python
+from connectors import DockerComposeConnector
+
+connector = DockerComposeConnector()
+nodes, edges = connector.parse("docker-compose.yml")
+```
+
+Source: connectors/docker_compose.py:10-14
+
+## Methods
+
+### parse()
+
+Parse a docker-compose.yml file and extract nodes and edges.
+
+```python
+def parse(self, file_path: str) -> tuple[List[Node], List[Edge]]:
+    """Parse docker-compose.yml file."""
+    self.logger.info(f"Parsing Docker Compose file: {file_path}")
+    
+    try:
+        with open(file_path, 'r') as f:
+            compose_data = yaml.safe_load(f)
+    except Exception as e:
+        self.logger.error(f"Failed to parse {file_path}: {e}")
+        return [], []
+    
+    nodes = []
+    edges = []
+    
+    services = compose_data.get('services', {})
+    
+    for service_name, service_config in services.items():
+        # Create service node
+        service_node = self._create_service_node(service_name, service_config)
+        nodes.append(service_node)
+        
+        # Create edges for explicit dependencies
+        depends_on = service_config.get('depends_on', [])
+        for dependency in depends_on:
+            edge = self._create_edge(
+                'depends_on',
+                service_node.id,
+                f"service:{dependency}"
+            )
+            edges.append(edge)
+        
+        # Create edges for service-to-service calls from environment variables
+        env_vars = self._extract_env_vars(service_config)
+        service_deps = self._extract_service_dependencies_from_env(env_vars)
+        
+        for dep_service in service_deps:
+            edge = self._create_edge(
+                'calls',
+                service_node.id,
+                f"service:{dep_service}"
+            )
+            edges.append(edge)
+        
+        # Create edges for database/cache dependencies
+        db_deps = self._extract_database_dependencies_from_env(env_vars)
+        for db_name in db_deps:
+            target_type = 'database'  # default
+            for key, value in env_vars.items():
+                if db_name in value:
+                    target_type = self._get_dependency_type(db_name, key)
+                    break
+            
+            edge = self._create_edge(
+                'uses',
+                service_node.id,
+                f"{target_type}:{db_name}"
+            )
+            edges.append(edge)
+    
+    self.logger.info(f"Parsed {len(nodes)} nodes and {len(edges)} edges from Docker Compose")
+    return nodes, edges
+```
+
+Source: connectors/docker_compose.py:16-77
+
+<ParamField path="file_path" type="string" required>
+  Path to the docker-compose.yml file
+</ParamField>
+
+**Returns:** `tuple[List[Node], List[Edge]]`
+
+Extracted data includes:
+- **Service nodes** with properties: team, oncall, port, image, build
+- **Database/cache nodes** inferred from images (postgres, redis, mysql, mongodb)
+- **depends_on edges** from explicit Docker Compose dependencies
+- **calls edges** from service URLs in environment variables
+- **uses edges** for database and cache dependencies
+
+### _create_service_node()
+
+Create a service node from Docker Compose service configuration.
+
+```python
+def _create_service_node(self, service_name: str, service_config: Dict[str, Any]) -> Node:
+    """Create a service node from Docker Compose service configuration."""
+    labels = service_config.get('labels', {})
+    ports = service_config.get('ports', [])
+    
+    # Extract port number if available
+    port = None
+    if ports:
+        port_mapping = ports[0]  # Take first port mapping
+        if isinstance(port_mapping, str) and ':' in port_mapping:
+            port = int(port_mapping.split(':')[0])
+    
+    # Determine service type based on image or labels
+    service_type = self._determine_service_type(service_config)
+    
+    properties = {
+        'team': labels.get('team'),
+        'oncall': labels.get('oncall'),
+        'port': port,
+        'image': service_config.get('image'),
+        'build': service_config.get('build')
+    }
+    
+    # Add specific properties based on labels
+    for key, value in labels.items():
+        if key not in ['team', 'oncall']:
+            properties[key] = value
+    
+    # Filter out None values
+    properties = {k: v for k, v in properties.items() if v is not None}
+    
+    return self._create_node(service_type, service_name, properties)
+```
+
+Source: connectors/docker_compose.py:79-110
+
+<ParamField path="service_name" type="string" required>
+  Name of the service from docker-compose.yml
+</ParamField>
+
+<ParamField path="service_config" type="Dict[str, Any]" required>
+  Service configuration dictionary from Docker Compose
+</ParamField>
+
+**Returns:** `Node`
+
+Node properties include:
+- `team`: Team name from labels
+- `oncall`: On-call information from labels
+- `port`: Exposed port number
+- `image`: Docker image name
+- `build`: Build configuration
+- Additional custom labels
+
+### _determine_service_type()
+
+Determine the type of service based on configuration.
+
+```python
+def _determine_service_type(self, service_config: Dict[str, Any]) -> str:
+    """Determine the type of service based on configuration."""
+    labels = service_config.get('labels', {})
+    image = service_config.get('image', '')
+    
+    # Check labels first
+    if labels.get('type'):
+        return labels['type']
+    
+    # Infer from image name
+    if 'postgres' in image.lower():
+        return 'database'
+    elif 'redis' in image.lower():
+        return 'cache'
+    elif 'mysql' in image.lower() or 'mongodb' in image.lower():
+        return 'database'
+    else:
+        return 'service'
+```
+
+Source: connectors/docker_compose.py:112-129
+
+<ParamField path="service_config" type="Dict[str, Any]" required>
+  Service configuration dictionary
+</ParamField>
+
+**Returns:** `str` - One of: "service", "database", "cache"
+
+Type inference logic:
+1. Check for explicit `type` label
+2. Infer from image name (postgres → database, redis → cache)
+3. Default to "service"
+
+### _extract_env_vars()
+
+Extract environment variables from service configuration.
+
+```python
+def _extract_env_vars(self, service_config: Dict[str, Any]) -> Dict[str, str]:
+    """Extract environment variables from service configuration."""
+    env_vars = {}
+    environment = service_config.get('environment', [])
+    
+    if isinstance(environment, list):
+        for env_var in environment:
+            if '=' in env_var:
+                key, value = env_var.split('=', 1)
+                env_vars[key] = value
+    elif isinstance(environment, dict):
+        env_vars = environment
+    
+    return env_vars
+```
+
+Source: connectors/docker_compose.py:131-144
+
+<ParamField path="service_config" type="Dict[str, Any]" required>
+  Service configuration dictionary
+</ParamField>
+
+**Returns:** `Dict[str, str]` - Dictionary of environment variables
+
+Supports both Docker Compose environment formats:
+- List format: `["KEY=value", "KEY2=value2"]`
+- Dictionary format: `{"KEY": "value", "KEY2": "value2"}`
+
+## Usage Example
+
+```python
+from connectors import DockerComposeConnector
+
+# Initialize connector
+connector = DockerComposeConnector()
+
+# Parse docker-compose.yml
+nodes, edges = connector.parse("./docker-compose.yml")
+
+# Process results
+print(f"Found {len(nodes)} services and {len(edges)} dependencies")
+
+for node in nodes:
+    print(f"Service: {node.name} (type: {node.type})")
+    if node.properties.get('team'):
+        print(f"  Team: {node.properties['team']}")
+    if node.properties.get('port'):
+        print(f"  Port: {node.properties['port']}")
+
+for edge in edges:
+    print(f"Relationship: {edge.source} -{edge.type}-> {edge.target}")
+```
+
+## Example Docker Compose File
+
+```yaml
+version: '3.8'
+
+services:
+  api-gateway:
+    image: api-gateway:latest
+    ports:
+      - "8080:8080"
+    labels:
+      team: platform
+      oncall: platform-oncall
+    environment:
+      - USER_SERVICE_URL=http://user-service:8081
+      - DATABASE_URL=postgresql://user:pass@postgres-main:5432/api
+      - REDIS_URL=redis://redis-cache:6379
+    depends_on:
+      - postgres-main
+      - redis-cache
+  
+  user-service:
+    image: user-service:latest
+    ports:
+      - "8081:8081"
+    labels:
+      team: identity
+    environment:
+      - DATABASE_URL=postgresql://user:pass@postgres-main:5432/users
+  
+  postgres-main:
+    image: postgres:14
+    environment:
+      POSTGRES_PASSWORD: password
+  
+  redis-cache:
+    image: redis:7-alpine
+```
+
+**Resulting Graph:**
+
+**Nodes:**
+- `service:api-gateway` (team: platform, port: 8080)
+- `service:user-service` (team: identity, port: 8081)
+- `database:postgres-main`
+- `cache:redis-cache`
+
+**Edges:**
+- `api-gateway` --depends_on--> `postgres-main`
+- `api-gateway` --depends_on--> `redis-cache`
+- `api-gateway` --calls--> `user-service`
+- `api-gateway` --uses--> `postgres-main`
+- `api-gateway` --uses--> `redis-cache`
+- `user-service` --uses--> `postgres-main`

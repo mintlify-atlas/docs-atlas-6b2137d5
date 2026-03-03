@@ -1,0 +1,167 @@
+---
+title: Introduction
+description: Unify engineering knowledge across code, infrastructure, and operations into a queryable graph with a natural language interface
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Engineering Knowledge Graph Hero"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Engineering Knowledge Graph Hero"
+/>
+
+## What is Engineering Knowledge Graph?
+
+Engineering Knowledge Graph (EKG) is a prototype system that transforms how engineering teams understand their infrastructure. Instead of manually searching through Docker Compose files, team wikis, and Kubernetes configs, EKG creates a unified knowledge graph that you can query using natural language.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get EKG running in 5 minutes with Docker Compose
+  </Card>
+  <Card
+    title="Architecture"
+    icon="sitemap"
+    href="/architecture"
+  >
+    Understand the 4-layer architecture and how it works
+  </Card>
+  <Card
+    title="API reference"
+    icon="code"
+    href="/api/overview"
+  >
+    Explore the REST API endpoints and query methods
+  </Card>
+  <Card
+    title="Custom Connectors"
+    icon="wrench"
+    href="/guides/custom-connectors"
+    >
+    Contribute and extend EKG with new connectors
+  </Card>
+</CardGroup>
+
+## Key features
+
+<AccordionGroup>
+  <Accordion title="Natural language queries">
+    Ask questions like "Who owns the payment service?" or "What breaks if Redis goes down?" instead of writing complex queries or searching through multiple files.
+    
+    **Example queries:**
+    - "What does order-service depend on?"
+    - "What's the blast radius of users-db?"
+    - "How does api-gateway connect to orders-db?"
+    - "Who should I page if payments-db is down?"
+  </Accordion>
+
+  <Accordion title="Unified knowledge graph">
+    EKG automatically parses and connects data from multiple sources:
+    - Docker Compose service definitions
+    - Team ownership and contact info
+    - Kubernetes deployments and services
+    - Environment variables and dependencies
+    
+    All of this information is stored in Neo4j as nodes (services, databases, teams) and relationships (calls, uses, owns).
+  </Accordion>
+
+  <Accordion title="Impact analysis">
+    Understand the blast radius of failures before they happen. EKG can trace all upstream and downstream dependencies, identify affected services, and determine which teams need to be notified.
+    
+    Perfect for:
+    - Change impact analysis
+    - Incident response planning
+    - Dependency audits
+    - Ownership verification
+  </Accordion>
+
+  <Accordion title="Pluggable connectors">
+    The BaseConnector interface makes it easy to add new data sources. The system ships with:
+    - **DockerComposeConnector** - Parse service definitions and dependencies
+    - **TeamsConnector** - Extract ownership information
+    - **KubernetesConnector** - Process K8s deployments
+    
+    Add your own connectors for Terraform, Ansible, service catalogs, or any configuration source.
+  </Accordion>
+</AccordionGroup>
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="On-call engineering" icon="bell">
+    Quickly identify service owners, blast radius, and dependencies during incidents
+  </Card>
+  <Card title="Platform engineering" icon="server">
+    Map service dependencies, audit infrastructure, and enforce ownership policies
+  </Card>
+  <Card title="Engineering management" icon="users">
+    Understand team boundaries, service ownership distribution, and system complexity
+  </Card>
+  <Card title="Developer onboarding" icon="graduation-cap">
+    Help new engineers explore the system architecture through natural queries
+  </Card>
+</CardGroup>
+
+## How it works
+
+EKG uses a 4-layer architecture:
+
+1. **Connectors** parse raw configuration files (Docker Compose, Teams YAML, K8s manifests)
+2. **Graph Storage** persists nodes and relationships in Neo4j
+3. **Query Engine** executes graph traversals for dependency analysis
+4. **Chat Interface** translates natural language to graph queries using Google Gemini
+
+<Note>
+  **Built with:** Python, FastAPI, Neo4j, Google Gemini, and Docker Compose
+</Note>
+
+## Sample query flow
+
+Here's what happens when you ask "What breaks if redis-main goes down?":
+
+<Steps>
+  <Step title="Query parsing">
+    Gemini LLM analyzes the query and identifies:
+    - Query type: `blast_radius`
+    - Node ID: `cache:redis-main`
+    - Confidence: 0.95
+  </Step>
+  
+  <Step title="Graph traversal">
+    QueryEngine executes Cypher queries to find:
+    - Upstream dependents (services that use Redis)
+    - Downstream dependencies (what Redis depends on)
+    - Affected teams (owners of impacted services)
+  </Step>
+  
+  <Step title="Response formatting">
+    Gemini formats the results into a natural response:
+    "If redis-main fails, it would affect 4 services: auth-service, inventory-service, notification-service, and recommendation-service. This impacts 3 teams: identity-team, orders-team, and platform-team."
+  </Step>
+</Steps>
+
+## Ready to get started?
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick start guide"
+    icon="play"
+    href="/quickstart"
+  >
+    Install and run your first query in under 5 minutes
+  </Card>
+  <Card
+    title="Architecture deep dive"
+    icon="book"
+    href="/architecture"
+  >
+    Learn how each component works together
+  </Card>
+</CardGroup>

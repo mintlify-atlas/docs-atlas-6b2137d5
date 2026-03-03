@@ -1,0 +1,377 @@
+---
+title: "KubernetesConnector"
+description: "Connector for parsing Kubernetes deployment YAML files into knowledge graph nodes and edges"
+---
+
+## Overview
+
+The `KubernetesConnector` parses Kubernetes deployment and service YAML files to extract deployments, services, and their relationships. It supports multi-document YAML files and identifies service dependencies from environment variables in container specifications.
+
+## Class Definition
+
+```python
+from connectors import KubernetesConnector
+
+connector = KubernetesConnector()
+nodes, edges = connector.parse("k8s-deployments.yaml")
+```
+
+Source: connectors/kubernetes.py:10-14
+
+## Methods
+
+### parse()
+
+Parse a Kubernetes YAML file containing multiple deployment and service resources.
+
+```python
+def parse(self, file_path: str) -> tuple[List[Node], List[Edge]]:
+    """Parse k8s-deployments.yaml file."""
+    self.logger.info(f"Parsing Kubernetes file: {file_path}")
+    
+    try:
+        with open(file_path, 'r') as f:
+            # Parse multiple YAML documents
+            k8s_docs = list(yaml.safe_load_all(f))
+    except Exception as e:
+        self.logger.error(f"Failed to parse {file_path}: {e}")
+        return [], []
+    
+    nodes = []
+    edges = []
+    
+    deployments = {}
+    services = {}
+    
+    # First pass: collect all resources
+    for doc in k8s_docs:
+        if not doc or 'kind' not in doc:
+            continue
+            
+        kind = doc['kind']
+        metadata = doc.get('metadata', {})
+        name = metadata.get('name')
+        
+        if kind == 'Deployment':
+            deployments[name] = doc
+        elif kind == 'Service':
+            services[name] = doc
+    
+    # Second pass: create nodes and edges
+    for deployment_name, deployment in deployments.items():
+        # Create deployment node
+        deployment_node = self._create_deployment_node(deployment)
+        nodes.append(deployment_node)
+        
+        # Extract dependencies from environment variables
+        spec = deployment.get('spec', {})
+        template = spec.get('template', {})
+        pod_spec = template.get('spec', {})
+        containers = pod_spec.get('containers', [])
+        
+        for container in containers:
+            env_vars = self._extract_k8s_env_vars(container)
+            
+            # Create edges for service dependencies
+            service_deps = self._extract_k8s_service_dependencies(env_vars)
+            for dep_service in service_deps:
+                edge = self._create_edge(
+                    'calls',
+                    deployment_node.id,
+                    f"service:{dep_service}"
+                )
+                edges.append(edge)
+    
+    # Create service nodes
+    for service_name, service in services.items():
+        service_node = self._create_k8s_service_node(service)
+        nodes.append(service_node)
+        
+        # Link service to deployment if they have the same name
+        if service_name in deployments:
+            edge = self._create_edge(
+                'exposes',
+                f"service:{service_name}",
+                f"deployment:{service_name}"
+            )
+            edges.append(edge)
+    
+    self.logger.info(f"Parsed {len(nodes)} nodes and {len(edges)} edges from Kubernetes")
+    return nodes, edges
+```
+
+Source: connectors/kubernetes.py:16-88
+
+<ParamField path="file_path" type="string" required>
+  Path to the Kubernetes YAML file (supports multi-document YAML)
+</ParamField>
+
+**Returns:** `tuple[List[Node], List[Edge]]`
+
+Extracted data includes:
+- **Deployment nodes** with properties: namespace, team, replicas, image, resources
+- **Service nodes** with properties: namespace, port, target_port
+- **calls edges** from service URLs in container environment variables
+- **exposes edges** linking services to their deployments
+
+### _create_deployment_node()
+
+Create a deployment node from a Kubernetes Deployment resource.
+
+```python
+def _create_deployment_node(self, deployment: Dict[str, Any]) -> Node:
+    """Create a deployment node from Kubernetes deployment."""
+    metadata = deployment.get('metadata', {})
+    name = metadata.get('name')
+    labels = metadata.get('labels', {})
+    
+    spec = deployment.get('spec', {})
+    replicas = spec.get('replicas', 1)
+    
+    template = spec.get('template', {})
+    pod_spec = template.get('spec', {})
+    containers = pod_spec.get('containers', [])
+    
+    # Extract container information
+    container_info = {}
+    if containers:
+        container = containers[0]  # Take first container
+        container_info = {
+            'image': container.get('image'),
+            'resources': container.get('resources', {})
+        }
+    
+    properties = {
+        'namespace': metadata.get('namespace'),
+        'team': labels.get('team'),
+        'replicas': replicas,
+        **container_info
+    }
+    
+    # Filter out None values
+    properties = {k: v for k, v in properties.items() if v is not None}
+    
+    return self._create_node('deployment', name, properties)
+```
+
+Source: connectors/kubernetes.py:90-122
+
+<ParamField path="deployment" type="Dict[str, Any]" required>
+  Kubernetes Deployment resource dictionary
+</ParamField>
+
+**Returns:** `Node` with type "deployment"
+
+Node properties include:
+- `namespace`: Kubernetes namespace
+- `team`: Team label value
+- `replicas`: Number of replicas
+- `image`: Container image
+- `resources`: Resource requests and limits
+
+### _create_k8s_service_node()
+
+Create a service node from a Kubernetes Service resource.
+
+```python
+def _create_k8s_service_node(self, service: Dict[str, Any]) -> Node:
+    """Create a service node from Kubernetes service."""
+    metadata = service.get('metadata', {})
+    name = metadata.get('name')
+    
+    spec = service.get('spec', {})
+    ports = spec.get('ports', [])
+    
+    # Extract port information
+    port_info = {}
+    if ports:
+        port = ports[0]  # Take first port
+        port_info = {
+            'port': port.get('port'),
+            'target_port': port.get('targetPort')
+        }
+    
+    properties = {
+        'namespace': metadata.get('namespace'),
+        **port_info
+    }
+    
+    # Filter out None values
+    properties = {k: v for k, v in properties.items() if v is not None}
+    
+    return self._create_node('service', name, properties)
+```
+
+Source: connectors/kubernetes.py:124-149
+
+<ParamField path="service" type="Dict[str, Any]" required>
+  Kubernetes Service resource dictionary
+</ParamField>
+
+**Returns:** `Node` with type "service"
+
+Node properties include:
+- `namespace`: Kubernetes namespace
+- `port`: Service port
+- `target_port`: Target port on pods
+
+### _extract_k8s_env_vars()
+
+Extract environment variables from a Kubernetes container specification.
+
+```python
+def _extract_k8s_env_vars(self, container: Dict[str, Any]) -> Dict[str, str]:
+    """Extract environment variables from Kubernetes container spec."""
+    env_vars = {}
+    env_list = container.get('env', [])
+    
+    for env_var in env_list:
+        name = env_var.get('name')
+        value = env_var.get('value')
+        
+        # Skip secret references for now
+        if value and name:
+            env_vars[name] = value
+    
+    return env_vars
+```
+
+Source: connectors/kubernetes.py:151-164
+
+<ParamField path="container" type="Dict[str, Any]" required>
+  Container specification from pod template
+</ParamField>
+
+**Returns:** `Dict[str, str]` - Dictionary of environment variables
+
+**Note:** Currently skips environment variables from `valueFrom` (secrets, configMaps) and only includes direct `value` entries.
+
+### _extract_k8s_service_dependencies()
+
+Extract service dependencies from Kubernetes environment variables.
+
+```python
+def _extract_k8s_service_dependencies(self, env_vars: Dict[str, str]) -> List[str]:
+    """Extract service dependencies from Kubernetes environment variables."""
+    dependencies = []
+    
+    for key, value in env_vars.items():
+        if key.endswith('_SERVICE_URL') or key.endswith('_URL'):
+            # Extract service name from Kubernetes service URL
+            # Format: http://service-name.namespace.svc.cluster.local:port
+            if 'svc.cluster.local' in value:
+                parts = value.split('://')
+                if len(parts) > 1:
+                    host_part = parts[1].split('.')[0]
+                    dependencies.append(host_part)
+            elif '://' in value:
+                # Fallback for simpler URLs
+                url_part = value.split('://')[1]
+                if ':' in url_part:
+                    service_name = url_part.split(':')[0]
+                    dependencies.append(service_name)
+    
+    return dependencies
+```
+
+Source: connectors/kubernetes.py:166-186
+
+<ParamField path="env_vars" type="Dict[str, str]" required>
+  Dictionary of environment variables
+</ParamField>
+
+**Returns:** `List[str]` - List of service names
+
+Supports both URL formats:
+- Full Kubernetes DNS: `http://service-name.namespace.svc.cluster.local:8080`
+- Short form: `http://service-name:8080`
+
+## Usage Example
+
+```python
+from connectors import KubernetesConnector
+
+# Initialize connector
+connector = KubernetesConnector()
+
+# Parse Kubernetes YAML file
+nodes, edges = connector.parse("./k8s/deployments.yaml")
+
+# Process results
+for node in nodes:
+    if node.type == 'deployment':
+        print(f"Deployment: {node.name}")
+        print(f"  Replicas: {node.properties.get('replicas', 1)}")
+        print(f"  Image: {node.properties.get('image')}")
+        if node.properties.get('team'):
+            print(f"  Team: {node.properties['team']}")
+    elif node.type == 'service':
+        print(f"Service: {node.name}:{node.properties.get('port')}")
+
+for edge in edges:
+    print(f"{edge.source} --{edge.type}--> {edge.target}")
+```
+
+## Example Kubernetes YAML
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: production
+  labels:
+    app: user-service
+    team: identity
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      containers:
+      - name: user-service
+        image: user-service:v1.2.3
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+        env:
+        - name: AUTH_SERVICE_URL
+          value: http://auth-service.production.svc.cluster.local:8080
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: url
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: production
+spec:
+  selector:
+    app: user-service
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP
+```
+
+**Resulting Graph:**
+
+**Nodes:**
+- `deployment:user-service` (namespace: production, team: identity, replicas: 3, image: user-service:v1.2.3)
+- `service:user-service` (namespace: production, port: 8080, target_port: 8080)
+
+**Edges:**
+- `deployment:user-service` --calls--> `service:auth-service`
+- `service:user-service` --exposes--> `deployment:user-service`

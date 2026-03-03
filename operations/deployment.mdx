@@ -1,0 +1,314 @@
+---
+title: "Deployment Guide"
+description: "Deploy the Engineering Knowledge Graph with Docker Compose"
+icon: "rocket"
+---
+
+## Overview
+
+The Engineering Knowledge Graph uses Docker Compose for local development and can be deployed to production using containerized infrastructure. The system consists of two main services:
+
+- **Neo4j**: Graph database for storing the knowledge graph
+- **EKG App**: FastAPI application serving the web interface and API
+
+## Prerequisites
+
+Before deploying, ensure you have:
+
+- Docker and Docker Compose installed
+- Python 3.11+ (for local development)
+- Gemini API key from Google AI Studio
+
+## Docker Compose Deployment
+
+### Configuration
+
+The system uses environment variables for configuration. Create a `.env` file based on `.env.example`:
+
+```bash .env
+GEMINI_API_KEY=your_gemini_api_key_here
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=password
+```
+
+### Services Configuration
+
+The `docker-compose.yml` defines the complete stack:
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  neo4j:
+    image: neo4j:5.15
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+    ports:
+      - "7474:7474"  # Neo4j Browser
+      - "7687:7687"  # Bolt protocol
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ekg-app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - .:/app
+    command: ["python", "-m", "uvicorn", "chat.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+```
+
+### Key Features
+
+<AccordionGroup>
+  <Accordion title="Health Checks">
+    The Neo4j service includes a health check that ensures the database is ready before the application starts:
+    
+    ```yaml
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ```
+    
+    The `ekg-app` service waits for Neo4j to be healthy:
+    
+    ```yaml
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    ```
+  </Accordion>
+
+  <Accordion title="Persistent Storage">
+    Named volumes ensure data persistence across container restarts:
+    
+    - `neo4j_data`: Stores graph database data
+    - `neo4j_logs`: Stores Neo4j logs
+    - `./data`: Mounted for configuration files (docker-compose.yml, teams.yaml, k8s-deployments.yaml)
+  </Accordion>
+
+  <Accordion title="Development Mode">
+    The application runs with hot-reload enabled for development:
+    
+    ```yaml
+    command: ["python", "-m", "uvicorn", "chat.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ```
+    
+    The entire source directory is mounted for live code updates:
+    
+    ```yaml
+    volumes:
+      - .:/app
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Starting the System
+
+### Quick Start
+
+```bash
+# Start all services
+docker-compose up
+
+# Start in detached mode
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# View logs for specific service
+docker-compose logs -f ekg-app
+```
+
+### First-Time Setup
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd engineering-knowledge-graph
+   ```
+
+2. **Configure environment variables**
+   ```bash
+   cp .env.example .env
+   # Edit .env and add your GEMINI_API_KEY
+   ```
+
+3. **Start the services**
+   ```bash
+   docker-compose up -d
+   ```
+
+4. **Wait for initialization**
+   The application will automatically:
+   - Connect to Neo4j (see main.py:89)
+   - Load configuration data from `data/` directory (see main.py:99-129)
+   - Populate the graph database (see main.py:132-135)
+
+5. **Access the application**
+   - Web interface: http://localhost:8000
+   - Neo4j Browser: http://localhost:7474
+   - API docs: http://localhost:8000/docs
+
+## Dockerfile Structure
+
+The application uses a multi-stage build optimized for Python:
+
+```dockerfile Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create data directory
+RUN mkdir -p /app/data
+
+EXPOSE 8000
+
+CMD ["python", "-m", "uvicorn", "chat.app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### Build Optimization
+
+- Uses `python:3.11-slim` for smaller image size
+- Installs only required system dependencies (gcc for building Python packages)
+- Leverages Docker layer caching by copying `requirements.txt` first
+- Cleans up apt cache to reduce image size
+- Uses `--no-cache-dir` to avoid storing pip cache
+
+## Production Deployment
+
+### Environment Variables
+
+For production, override the default environment variables:
+
+```yaml
+environment:
+  - NEO4J_URI=bolt://neo4j:7687
+  - NEO4J_USER=neo4j
+  - NEO4J_PASSWORD=${SECURE_NEO4J_PASSWORD}  # Use secrets management
+  - GEMINI_API_KEY=${GEMINI_API_KEY}         # Use secrets management
+```
+
+<Warning>
+  Never commit sensitive credentials to version control. Use environment variables, Docker secrets, or a secrets management service like AWS Secrets Manager or HashiCorp Vault.
+</Warning>
+
+### Production Configuration
+
+Create a `docker-compose.prod.yml` for production overrides:
+
+```yaml docker-compose.prod.yml
+version: '3.8'
+
+services:
+  neo4j:
+    restart: always
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+
+  ekg-app:
+    restart: always
+    command: ["python", "-m", "uvicorn", "chat.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    volumes:
+      - ./data:/app/data  # Only mount data, not source code
+```
+
+Deploy with:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+## Stopping and Cleanup
+
+```bash
+# Stop services
+docker-compose down
+
+# Stop and remove volumes (WARNING: deletes all data)
+docker-compose down -v
+
+# Restart services
+docker-compose restart
+
+# Restart specific service
+docker-compose restart ekg-app
+```
+
+## Data Management
+
+### Loading Configuration Data
+
+The system automatically loads configuration files from the `data/` directory on startup (see chat/app.py:90-134):
+
+```python
+data_dir = Path("data")
+
+# Load Docker Compose data
+docker_compose_file = data_dir / "docker-compose.yml"
+if docker_compose_file.exists():
+    connector = DockerComposeConnector()
+    nodes, edges = connector.parse(str(docker_compose_file))
+    all_nodes.extend(nodes)
+    all_edges.extend(edges)
+```
+
+### Reloading Data
+
+To reload configuration without restarting:
+
+```bash
+curl -X POST http://localhost:8000/api/reload
+```
+
+This endpoint (chat/app.py:186-193) clears the graph and reloads all configuration files.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up health checks and monitoring
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Common issues and solutions
+  </Card>
+</CardGroup>

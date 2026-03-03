@@ -1,0 +1,277 @@
+---
+title: 'path()'
+description: 'Find the shortest path between two nodes in the graph'
+---
+
+## Method Signature
+
+```python
+def path(
+    from_id: str,
+    to_id: str,
+    max_depth: int = 10
+) -> Dict[str, Any]
+```
+
+## Description
+
+The `path()` method finds the shortest path between two nodes in the graph, regardless of edge direction. This is useful for understanding how two components are connected and discovering unexpected dependencies or relationships.
+
+The method uses graph shortest path algorithms to efficiently find the minimal connection path.
+
+## Parameters
+
+<ParamField path="from_id" type="str" required>
+  The unique identifier of the source node. Should be in the format `type:name` (e.g., `service:frontend`, `database:users-db`).
+</ParamField>
+
+<ParamField path="to_id" type="str" required>
+  The unique identifier of the target node. Should be in the format `type:name`.
+</ParamField>
+
+<ParamField path="max_depth" type="int" default="10">
+  Maximum path length to search. Limits the search space to prevent performance issues on large graphs.
+</ParamField>
+
+## Returns
+
+<ResponseField name="result" type="Dict[str, Any]">
+  Path information containing:
+  
+  <Expandable title="Response Structure">
+    <ResponseField name="nodes" type="List[Dict[str, Any]]">
+      Ordered list of nodes in the path from source to target. Each node contains:
+      - `id`: Node identifier
+      - `name`: Node name
+      - `type`: Node type
+    </ResponseField>
+    
+    <ResponseField name="relationships" type="List[str]">
+      Ordered list of edge types connecting the nodes. Length is `len(nodes) - 1`.
+    </ResponseField>
+    
+    <ResponseField name="path_length" type="int">
+      Number of edges in the path (0 if no path found)
+    </ResponseField>
+    
+    <ResponseField name="path_description" type="str">
+      Human-readable description of the complete path showing each connection
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### No Path Found
+
+If no path exists within the `max_depth` constraint:
+
+```python
+{
+    'nodes': [],
+    'relationships': [],
+    'path_length': 0,
+    'path_description': "No path found between <from_id> and <to_id>"
+}
+```
+
+## Examples
+
+### Basic Usage
+
+```python
+from graph.query import QueryEngine
+
+query_engine = QueryEngine(storage)
+
+# Find how frontend connects to a database
+path_result = query_engine.path(
+    from_id="application:web-frontend",
+    to_id="database:users-db"
+)
+
+print(f"Path length: {path_result['path_length']} hops")
+print(f"\n{path_result['path_description']}")
+```
+
+### Output Example
+
+```
+Path length: 3 hops
+
+web-frontend (application) --calls-> api-gateway (service) -> api-gateway (service) --depends_on-> auth-service (service) -> auth-service (service) --uses-> users-db (database)
+```
+
+### Detailed Path Analysis
+
+```python
+path_result = query_engine.path(
+    from_id="service:payment-api",
+    to_id="database:ledger-db",
+    max_depth=5
+)
+
+if path_result['path_length'] > 0:
+    print(f"Found path with {path_result['path_length']} steps:\n")
+    
+    # Print each step
+    nodes = path_result['nodes']
+    relationships = path_result['relationships']
+    
+    for i, node in enumerate(nodes):
+        print(f"Step {i + 1}: {node['name']} ({node['type']})")
+        if i < len(relationships):
+            print(f"         └─ {relationships[i]} →")
+else:
+    print("No connection found")
+```
+
+### Discover Unexpected Dependencies
+
+```python
+# Check if a service has an unexpected dependency
+frontend_to_db = query_engine.path(
+    from_id="application:mobile-app",
+    to_id="database:internal-admin-db"
+)
+
+if path_result['path_length'] > 0:
+    print("⚠️  WARNING: Mobile app has path to internal admin database!")
+    print(f"\nPath: {path_result['path_description']}")
+    print("\nThis may indicate:")
+    print("  - Architectural violation")
+    print("  - Security concern")
+    print("  - Missing API gateway")
+else:
+    print("✓ No direct path found (good)")
+```
+
+### Compare Multiple Paths
+
+```python
+# Find paths from a service to multiple databases
+service_id = "service:analytics-processor"
+databases = [
+    "database:events-db",
+    "database:analytics-db",
+    "database:users-db"
+]
+
+print(f"Paths from {service_id}:\n")
+
+for db_id in databases:
+    path_result = query_engine.path(service_id, db_id)
+    if path_result['path_length'] > 0:
+        print(f"To {path_result['nodes'][-1]['name']}:")
+        print(f"  Length: {path_result['path_length']} hops")
+        print(f"  Via: {' → '.join([n['name'] for n in path_result['nodes'][1:-1]])}")
+    else:
+        print(f"To {db_id}: No path")
+    print()
+```
+
+### Visualize Connection Chain
+
+```python
+path_result = query_engine.path(
+    from_id="service:order-service",
+    to_id="service:notification-service"
+)
+
+if path_result['path_length'] > 0:
+    print("Connection chain:\n")
+    
+    nodes = path_result['nodes']
+    relationships = path_result['relationships']
+    
+    # Create visual representation
+    for i in range(len(nodes)):
+        node = nodes[i]
+        
+        # Indent based on position
+        indent = "  " * i
+        print(f"{indent}[{node['type']}] {node['name']}")
+        
+        # Show relationship
+        if i < len(relationships):
+            print(f"{indent}  |")
+            print(f"{indent}  └─── {relationships[i]} ───┐")
+            print(f"{indent}                      |")
+```
+
+### Bidirectional Dependency Check
+
+```python
+# Check if two services have circular dependencies
+service_a = "service:auth-service"
+service_b = "service:user-service"
+
+path_a_to_b = query_engine.path(service_a, service_b)
+path_b_to_a = query_engine.path(service_b, service_a)
+
+if path_a_to_b['path_length'] > 0 and path_b_to_a['path_length'] > 0:
+    print("⚠️  CIRCULAR DEPENDENCY DETECTED")
+    print(f"\n{service_a} → {service_b}:")
+    print(f"  {path_a_to_b['path_description']}")
+    print(f"\n{service_b} → {service_a}:")
+    print(f"  {path_b_to_a['path_description']}")
+elif path_a_to_b['path_length'] > 0:
+    print(f"One-way dependency: {service_a} depends on {service_b}")
+elif path_b_to_a['path_length'] > 0:
+    print(f"One-way dependency: {service_b} depends on {service_a}")
+else:
+    print("No dependencies detected")
+```
+
+### Architecture Validation
+
+```python
+# Ensure frontend doesn't directly access databases
+frontend_apps = [
+    "application:web-frontend",
+    "application:mobile-app",
+    "application:admin-portal"
+]
+
+databases = query_engine.get_nodes(node_type="database")
+
+violations = []
+
+for app_id in frontend_apps:
+    for db in databases:
+        path_result = query_engine.path(app_id, db['id'], max_depth=2)
+        if path_result['path_length'] > 0 and path_result['path_length'] <= 2:
+            violations.append({
+                'app': app_id,
+                'database': db['name'],
+                'path': path_result['path_description']
+            })
+
+if violations:
+    print(f"⚠️  Found {len(violations)} architecture violations:")
+    for v in violations:
+        print(f"\n{v['app']} → {v['database']}")
+        print(f"  {v['path']}")
+else:
+    print("✓ No direct frontend-to-database connections found")
+```
+
+## Use Cases
+
+- **Dependency discovery**: Find how two components are connected
+- **Architecture validation**: Ensure components follow architectural patterns
+- **Debugging**: Understand unexpected connections
+- **Security audits**: Verify no unauthorized access paths exist
+- **Impact analysis**: Understand connection chains for changes
+- **Circular dependency detection**: Find bidirectional dependencies
+- **Documentation**: Generate connection diagrams
+
+## Performance Notes
+
+- Uses optimized shortest path algorithms (Neo4j's `shortestPath`)
+- Performance degrades with very large `max_depth` values
+- Returns only the shortest path (not all possible paths)
+
+## See Also
+
+- [downstream()](/api/query-engine/downstream) - Find all dependencies
+- [upstream()](/api/query-engine/upstream) - Find all dependents
+- [blast_radius()](/api/query-engine/blast-radius) - Complete impact analysis

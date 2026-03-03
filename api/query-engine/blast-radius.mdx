@@ -1,0 +1,226 @@
+---
+title: 'blast_radius()'
+description: 'Full impact analysis including upstream, downstream, and affected teams'
+---
+
+## Method Signature
+
+```python
+def blast_radius(
+    node_id: str,
+    max_depth: int = 10
+) -> Dict[str, Any]
+```
+
+## Description
+
+The `blast_radius()` method provides comprehensive impact analysis by combining upstream and downstream dependency traversal with team ownership data. This gives you a complete picture of what would be affected if a node fails, changes, or is removed.
+
+This is particularly useful for:
+- Pre-deployment risk assessment
+- Incident impact analysis
+- Change review processes
+- Deprecation planning
+
+## Parameters
+
+<ParamField path="node_id" type="str" required>
+  The unique identifier of the node to analyze. Should be in the format `type:name` (e.g., `service:payment-api`, `database:users-db`).
+</ParamField>
+
+<ParamField path="max_depth" type="int" default="10">
+  Maximum traversal depth for both upstream and downstream analysis. Higher values provide more complete analysis but may impact performance.
+</ParamField>
+
+## Returns
+
+<ResponseField name="result" type="Dict[str, Any]">
+  A comprehensive impact analysis containing:
+  
+  <Expandable title="Response Structure">
+    <ResponseField name="center_node" type="Dict[str, Any]">
+      The starting node being analyzed, with all its properties
+    </ResponseField>
+    
+    <ResponseField name="upstream_dependencies" type="List[Dict[str, Any]]">
+      List of nodes that depend on the center node (what breaks if this fails). Each node includes:
+      - `id`: Node identifier
+      - `name`: Node name
+      - `type`: Node type
+      - `distance`: Hops from center node
+    </ResponseField>
+    
+    <ResponseField name="downstream_dependencies" type="List[Dict[str, Any]]">
+      List of nodes that the center node depends on (what this needs to function). Each node includes:
+      - `id`: Node identifier
+      - `name`: Node name
+      - `type`: Node type
+      - `distance`: Hops from center node
+    </ResponseField>
+    
+    <ResponseField name="affected_teams" type="List[str]">
+      List of team names that own any node in the blast radius
+    </ResponseField>
+    
+    <ResponseField name="total_affected_nodes" type="int">
+      Total count of unique nodes in the blast radius (including the center node)
+    </ResponseField>
+    
+    <ResponseField name="summary" type="str">
+      Human-readable summary of the impact analysis
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error Response
+
+If the node is not found:
+
+<ResponseField name="error" type="str">
+  Error message indicating the node was not found
+</ResponseField>
+
+## Examples
+
+### Basic Usage
+
+```python
+from graph.query import QueryEngine
+
+query_engine = QueryEngine(storage)
+
+# Analyze impact of a critical database
+impact = query_engine.blast_radius(
+    node_id="database:users-db",
+    max_depth=10
+)
+
+print(impact['summary'])
+print(f"\nAffected teams: {', '.join(impact['affected_teams'])}")
+print(f"Total affected nodes: {impact['total_affected_nodes']}")
+```
+
+### Output Example
+
+```
+If users-db fails, it could affect 12 upstream and 3 downstream components, impacting 5 teams.
+
+Affected teams: Platform, Identity, Payments, API, Frontend
+Total affected nodes: 16
+```
+
+### Pre-Deployment Risk Assessment
+
+```python
+# Before deploying a breaking change
+service_id = "service:auth-service"
+impact = query_engine.blast_radius(service_id)
+
+if impact['total_affected_nodes'] > 10:
+    print("⚠️  HIGH RISK DEPLOYMENT")
+    print(f"   Affects {len(impact['affected_teams'])} teams")
+    print(f"   Impacts {len(impact['upstream_dependencies'])} services")
+    
+    # Notify affected teams
+    print("\n📧 Teams to notify:")
+    for team in impact['affected_teams']:
+        print(f"   - {team}")
+else:
+    print("✓ Low risk deployment")
+```
+
+### Detailed Impact Report
+
+```python
+impact = query_engine.blast_radius("service:payment-api")
+
+print(f"=== Blast Radius Analysis for {impact['center_node']['name']} ===")
+print(f"\nNode Type: {impact['center_node']['type']}")
+
+print(f"\n📤 UPSTREAM IMPACT ({len(impact['upstream_dependencies'])} nodes)")
+print("   Services that will break if this fails:")
+for node in impact['upstream_dependencies'][:5]:  # Show first 5
+    print(f"   - {node['name']} ({node['type']}) [distance: {node['distance']}]")
+
+print(f"\n📥 DOWNSTREAM DEPENDENCIES ({len(impact['downstream_dependencies'])} nodes)")
+print("   Components this service needs:")
+for node in impact['downstream_dependencies'][:5]:  # Show first 5
+    print(f"   - {node['name']} ({node['type']}) [distance: {node['distance']}]")
+
+print(f"\n👥 AFFECTED TEAMS ({len(impact['affected_teams'])} teams)")
+for team in impact['affected_teams']:
+    print(f"   - {team}")
+
+print(f"\n📊 SUMMARY")
+print(f"   {impact['summary']}")
+```
+
+### Incident Response
+
+```python
+# During an outage
+failed_service = "database:postgres-main"
+impact = query_engine.blast_radius(failed_service)
+
+print("🚨 INCIDENT IMPACT REPORT")
+print(f"\nFailed component: {impact['center_node']['name']}")
+print(f"\n⚠️  {len(impact['upstream_dependencies'])} services are likely DOWN")
+
+# Group affected services by team
+from collections import defaultdict
+team_services = defaultdict(list)
+
+for node in impact['upstream_dependencies']:
+    # Get owner for each affected node
+    owner = query_engine.get_owner(node['id'])
+    if owner:
+        team_services[owner['name']].append(node['name'])
+
+print("\nImpact by team:")
+for team, services in team_services.items():
+    print(f"\n  {team} ({len(services)} services):")
+    for service in services:
+        print(f"    - {service}")
+```
+
+### Compare Multiple Components
+
+```python
+# Compare blast radius of different databases
+databases = [
+    "database:users-db",
+    "database:analytics-db",
+    "database:cache-db"
+]
+
+print("Database Impact Comparison:\n")
+for db_id in databases:
+    impact = query_engine.blast_radius(db_id, max_depth=5)
+    print(f"{impact['center_node']['name']}:")
+    print(f"  Upstream: {len(impact['upstream_dependencies'])} nodes")
+    print(f"  Downstream: {len(impact['downstream_dependencies'])} nodes")
+    print(f"  Teams: {len(impact['affected_teams'])}")
+    print()
+```
+
+## Use Cases
+
+- **Deployment planning**: Assess risk before deploying changes
+- **Incident response**: Quickly understand outage impact
+- **Change management**: Identify stakeholders for change approvals
+- **Deprecation planning**: Find all affected parties before removing a component
+- **Architecture review**: Identify overly critical components
+- **SLA prioritization**: Prioritize reliability work based on impact
+- **Communication**: Know which teams to notify about changes
+
+## Performance Notes
+
+- Blast radius analysis performs multiple queries (upstream, downstream, and team lookups)
+- For large graphs, consider using smaller `max_depth` values
+- Results are cached at the graph storage level for repeated queries
+
+## See Also
+
+- [upstream()](/api/query-engine/upstream) - Analyze upstream dependencies only
+- [downstream()](/api/query-engine/downstream) - Analyze downstream dependencies only
+- [get_owner()](/api/query-engine/ownership) - Find node ownership

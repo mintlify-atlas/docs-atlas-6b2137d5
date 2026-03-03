@@ -1,0 +1,335 @@
+---
+title: POST /api/reload
+description: Reload configuration data from files into the knowledge graph
+---
+
+The `/api/reload` endpoint reloads configuration data from source files and rebuilds the knowledge graph. Use this when configuration files have been updated.
+
+## Endpoint
+
+```
+POST /api/reload
+```
+
+## Request Body
+
+No request body required.
+
+## Response
+
+<ResponseField name="message" type="string">
+  Success message confirming data was reloaded.
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:8000/api/reload
+```
+
+```python Python
+import requests
+
+response = requests.post("http://localhost:8000/api/reload")
+result = response.json()
+print(result['message'])
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:8000/api/reload', {
+  method: 'POST'
+});
+
+const result = await response.json();
+console.log(result.message);
+```
+
+```json Response
+{
+  "message": "Data reloaded successfully"
+}
+```
+
+</CodeGroup>
+
+## What Gets Reloaded
+
+The reload process:
+
+<Steps>
+  <Step title="Clear existing graph">
+    Deletes all nodes and edges from Neo4j using `storage.clear_graph()`.
+  </Step>
+
+  <Step title="Re-parse configuration files">
+    Parses all configuration files in the `data/` directory:
+    
+    - `data/docker-compose.yml` (Docker Compose services)
+    - `data/teams.yaml` (Team ownership)
+    - `data/k8s-deployments.yaml` (Kubernetes resources, if present)
+  </Step>
+
+  <Step title="Rebuild graph">
+    Adds all nodes and edges back to Neo4j with updated data.
+  </Step>
+</Steps>
+
+<Warning>
+  The reload process clears the entire graph. Any manual changes made directly in Neo4j will be lost.
+</Warning>
+
+## Use Cases
+
+### After Configuration Changes
+
+Reload after updating configuration files:
+
+```bash
+# Update docker-compose.yml
+vim data/docker-compose.yml
+
+# Reload to see changes
+curl -X POST http://localhost:8000/api/reload
+```
+
+### Scheduled Refresh
+
+Set up a cron job to periodically reload from source control:
+
+```bash
+#!/bin/bash
+# reload-graph.sh
+
+cd /path/to/ekg
+git pull origin main
+curl -X POST http://localhost:8000/api/reload
+```
+
+```cron
+# Reload every hour
+0 * * * * /path/to/reload-graph.sh
+```
+
+### Integration with CI/CD
+
+Trigger reload after configuration deployments:
+
+```yaml
+# .github/workflows/deploy-config.yml
+name: Deploy Config
+
+on:
+  push:
+    paths:
+      - 'data/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      
+      - name: Deploy configs
+        run: |
+          scp -r data/* prod-server:/app/data/
+      
+      - name: Reload graph
+        run: |
+          curl -X POST https://ekg.company.com/api/reload
+```
+
+### File Watch Script
+
+Automatically reload when files change:
+
+```python
+import time
+import requests
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+class ConfigChangeHandler(FileSystemEventHandler):
+    def on_modified(self, event):
+        if event.src_path.endswith(('.yml', '.yaml')):
+            print(f"Config file changed: {event.src_path}")
+            print("Reloading graph...")
+            
+            response = requests.post("http://localhost:8000/api/reload")
+            print(response.json()['message'])
+
+observer = Observer()
+observer.schedule(ConfigChangeHandler(), path='./data', recursive=True)
+observer.start()
+
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    observer.stop()
+observer.join()
+```
+
+## Error Handling
+
+### Reload Failed
+
+```json
+{
+  "detail": "Failed to parse docker-compose.yml: Invalid YAML syntax"
+}
+```
+
+**Status Code**: 500
+
+**Cause**: Configuration file has syntax errors. Check:
+- YAML syntax is valid
+- Required fields are present
+- File permissions allow reading
+
+### Neo4j Connection Failed
+
+```json
+{
+  "detail": "Failed to connect to Neo4j"
+}
+```
+
+**Status Code**: 500
+
+**Cause**: Cannot connect to Neo4j database. Check:
+- Neo4j is running
+- NEO4J_URI is correct
+- Network connectivity
+
+## Implementation
+
+From `chat/app.py:185-193`:
+
+```python
+@app.post("/api/reload")
+async def reload_data():
+    """Reload configuration data."""
+    try:
+        await load_configuration_data()
+        return {"message": "Data reloaded successfully"}
+    except Exception as e:
+        logger.error(f"Failed to reload data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+The `load_configuration_data()` function from `chat/app.py:90-134`:
+
+```python
+async def load_configuration_data():
+    """Load and parse configuration files into the graph."""
+    global storage
+    
+    logger.info("Loading configuration data...")
+    
+    # Clear existing data
+    storage.clear_graph()
+    
+    data_dir = Path("data")
+    all_nodes = []
+    all_edges = []
+    
+    # Load Docker Compose data
+    docker_compose_file = data_dir / "docker-compose.yml"
+    if docker_compose_file.exists():
+        connector = DockerComposeConnector()
+        nodes, edges = connector.parse(str(docker_compose_file))
+        all_nodes.extend(nodes)
+        all_edges.extend(edges)
+    
+    # Load Teams data
+    teams_file = data_dir / "teams.yaml"
+    if teams_file.exists():
+        connector = TeamsConnector()
+        nodes, edges = connector.parse(str(teams_file))
+        all_nodes.extend(nodes)
+        all_edges.extend(edges)
+    
+    # Load Kubernetes data (optional)
+    k8s_file = data_dir / "k8s-deployments.yaml"
+    if k8s_file.exists():
+        connector = KubernetesConnector()
+        nodes, edges = connector.parse(str(k8s_file))
+        all_nodes.extend(nodes)
+        all_edges.extend(edges)
+    
+    # Store all data in graph
+    storage.add_nodes(all_nodes)
+    storage.add_edges(all_edges)
+```
+
+## Performance Considerations
+
+<Info>
+  Reload time depends on the size of your configuration files. Expect 1-5 seconds for typical configurations.
+</Info>
+
+### Reload Duration
+
+- **Small** (< 20 services): < 1 second
+- **Medium** (20-100 services): 1-3 seconds
+- **Large** (100+ services): 3-10 seconds
+
+### Downtime
+
+During reload:
+- Graph queries will return stale data until reload completes
+- The API remains available
+- Consider implementing a maintenance mode flag
+
+## Best Practices
+
+<Steps>
+  <Step title="Validate before reload">
+    Run configuration validation first:
+    
+    ```bash
+    python scripts/validate_config.py
+    # Only reload if validation passes
+    curl -X POST http://localhost:8000/api/reload
+    ```
+  </Step>
+
+  <Step title="Backup before reload">
+    Export the graph before destructive operations:
+    
+    ```bash
+    # Neo4j dump
+    docker exec neo4j neo4j-admin dump --to=/backups/graph-backup.dump
+    ```
+  </Step>
+
+  <Step title="Monitor reload status">
+    Check application logs during reload:
+    
+    ```bash
+    docker logs -f ekg-app
+    ```
+  </Step>
+
+  <Step title="Verify after reload">
+    Confirm data loaded correctly:
+    
+    ```bash
+    curl http://localhost:8000/api/entities | jq '.services | length'
+    ```
+  </Step>
+</Steps>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Configuration Guide" icon="gear" href="/guides/configuration">
+    Learn about configuration files
+  </Card>
+  <Card title="Data Sources" icon="database" href="/guides/data-sources">
+    Configure data source connectors
+  </Card>
+</CardGroup>

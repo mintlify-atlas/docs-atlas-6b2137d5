@@ -1,0 +1,331 @@
+---
+title: POST /api/query
+description: Process natural language queries against the knowledge graph
+---
+
+The `/api/query` endpoint accepts natural language queries and returns structured results from the knowledge graph.
+
+## Endpoint
+
+```
+POST /api/query
+```
+
+## Request Body
+
+<ParamField path="query" type="string" required>
+  The natural language query to process.
+  
+  Examples:
+  - "Who owns the payment service?"
+  - "What breaks if redis goes down?"
+  - "What does order-service depend on?"
+</ParamField>
+
+<ParamField path="session_id" type="string" default="default">
+  Optional session identifier for tracking conversation context.
+</ParamField>
+
+### Request Schema
+
+From `chat/app.py:46-48`:
+
+```python
+class QueryRequest(BaseModel):
+    query: str
+    session_id: str = "default"
+```
+
+## Response
+
+<ResponseField name="response" type="string">
+  Human-readable response formatted by the LLM.
+</ResponseField>
+
+<ResponseField name="query_type" type="string">
+  The type of query that was executed. Possible values:
+  - `get_node`
+  - `get_nodes`
+  - `downstream`
+  - `upstream`
+  - `blast_radius`
+  - `path`
+  - `get_owner`
+  - `get_team_assets`
+  - `find_by_property`
+  - `services_using_database`
+</ResponseField>
+
+<ResponseField name="confidence" type="float">
+  Confidence score from the LLM's intent parsing (0.0 to 1.0).
+  
+  Lower scores indicate the query may have been ambiguous.
+</ResponseField>
+
+<ResponseField name="raw_result" type="any">
+  Optional raw data from the query engine before LLM formatting.
+</ResponseField>
+
+### Response Schema
+
+From `chat/app.py:51-55`:
+
+```python
+class QueryResponse(BaseModel):
+    response: str
+    query_type: str
+    confidence: float
+    raw_result: Optional[Any] = None
+```
+
+## Examples
+
+### Ownership Query
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Who owns the payment service?",
+    "session_id": "demo"
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/api/query",
+    json={
+        "query": "Who owns the payment service?",
+        "session_id": "demo"
+    }
+)
+
+result = response.json()
+print(f"Response: {result['response']}")
+print(f"Query Type: {result['query_type']}")
+print(f"Confidence: {result['confidence']}")
+```
+
+```json Response
+{
+  "response": "The payment service is owned by the Payments team. You can reach them at payments@company.com or page them at @payments-oncall.",
+  "query_type": "get_owner",
+  "confidence": 0.95,
+  "raw_result": {
+    "id": "team:payments",
+    "type": "team",
+    "name": "Payments",
+    "properties": {
+      "email": "payments@company.com",
+      "slack": "@payments-oncall"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Dependency Query
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What does order-service depend on?",
+    "session_id": "demo"
+  }'
+```
+
+```json Response
+{
+  "response": "The order-service depends on:\n- users-db (PostgreSQL database)\n- redis-main (Redis cache)\n- payment-service (HTTP service on port 8083)",
+  "query_type": "downstream",
+  "confidence": 0.92,
+  "raw_result": [
+    {
+      "id": "database:users-db",
+      "type": "database",
+      "name": "users-db",
+      "distance": 1
+    },
+    {
+      "id": "cache:redis-main",
+      "type": "cache",
+      "name": "redis-main",
+      "distance": 1
+    },
+    {
+      "id": "service:payment-service",
+      "type": "service",
+      "name": "payment-service",
+      "distance": 1
+    }
+  ]
+}
+```
+
+</CodeGroup>
+
+### Blast Radius Query
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What breaks if redis-main goes down?",
+    "session_id": "demo"
+  }'
+```
+
+```json Response
+{
+  "response": "If redis-main fails, it could affect 3 upstream and 0 downstream components, impacting 2 teams (Orders, Payments).",
+  "query_type": "blast_radius",
+  "confidence": 0.88,
+  "raw_result": {
+    "center_node": {
+      "id": "cache:redis-main",
+      "type": "cache",
+      "name": "redis-main"
+    },
+    "upstream_dependencies": [
+      {"id": "service:order-service", "name": "order-service", "distance": 1},
+      {"id": "service:payment-service", "name": "payment-service", "distance": 1},
+      {"id": "service:api-gateway", "name": "api-gateway", "distance": 2}
+    ],
+    "downstream_dependencies": [],
+    "affected_teams": ["Orders", "Payments"],
+    "total_affected_nodes": 4
+  }
+}
+```
+
+</CodeGroup>
+
+## Error Handling
+
+### Query Parser Not Initialized
+
+```json
+{
+  "detail": "Query parser not initialized"
+}
+```
+
+**Status Code**: 500
+
+**Cause**: The application failed to initialize the query parser during startup. Check that:
+- Neo4j is accessible
+- GEMINI_API_KEY is valid
+- Configuration files are present
+
+### Query Processing Failed
+
+```json
+{
+  "detail": "Node service:invalid-service not found"
+}
+```
+
+**Status Code**: 500
+
+**Cause**: The requested entity doesn't exist in the graph.
+
+## Implementation
+
+From `chat/app.py:143-166`:
+
+```python
+@app.post("/api/query", response_model=QueryResponse)
+async def process_query(query_request: QueryRequest):
+    """Process a natural language query."""
+    global query_parser
+    
+    if not query_parser:
+        raise HTTPException(status_code=500, detail="Query parser not initialized")
+    
+    try:
+        result = query_parser.process_query(
+            query_request.query,
+            query_request.session_id
+        )
+        
+        return QueryResponse(
+            response=result['response'],
+            query_type=result['query_type'],
+            confidence=result.get('confidence', 0.0),
+            raw_result=result.get('raw_result')
+        )
+        
+    except Exception as e:
+        logger.error(f"Query processing failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+## Query Types
+
+The endpoint supports these query patterns:
+
+| Query Type | Example | Description |
+|-----------|---------|-------------|
+| `get_owner` | "Who owns payment-service?" | Find team ownership |
+| `downstream` | "What does X depend on?" | Get dependencies |
+| `upstream` | "What depends on X?" | Get dependents |
+| `blast_radius` | "What breaks if X fails?" | Impact analysis |
+| `path` | "How does X connect to Y?" | Find paths |
+| `get_team_assets` | "What does team X own?" | List team assets |
+| `get_nodes` | "List all services" | List entities |
+
+## Best Practices
+
+<Steps>
+  <Step title="Be specific">
+    Use exact service names from your configuration:
+    
+    - Good: "What does order-service depend on?"
+    - Bad: "What does the order thing need?"
+  </Step>
+
+  <Step title="Check confidence scores">
+    Low confidence indicates ambiguity:
+    
+    ```python
+    if result['confidence'] < 0.5:
+        print("Query may have been misunderstood")
+        print("Try rephrasing with exact entity names")
+    ```
+  </Step>
+
+  <Step title="Use session IDs">
+    Track related queries with session IDs:
+    
+    ```python
+    session_id = str(uuid.uuid4())
+    
+    # First query
+    result1 = query("Who owns payment-service?", session_id)
+    
+    # Follow-up query in same session
+    result2 = query("What does it depend on?", session_id)
+    ```
+  </Step>
+</Steps>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Query Engine" icon="diagram-project" href="/api/query-engine/overview">
+    Learn about the underlying query methods
+  </Card>
+  <Card title="Querying Guide" icon="book" href="/guides/querying">
+    Complete guide to querying patterns
+  </Card>
+</CardGroup>

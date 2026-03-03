@@ -1,0 +1,371 @@
+---
+title: GET /api/health
+description: Health check endpoint for monitoring system status
+---
+
+The `/api/health` endpoint provides system health status, useful for monitoring, load balancers, and orchestration platforms.
+
+## Endpoint
+
+```
+GET /api/health
+```
+
+## Response
+
+<ResponseField name="status" type="string">
+  Overall system status. Possible values:
+  - `healthy` - All components operational
+  - `degraded` - Some components have issues
+</ResponseField>
+
+<ResponseField name="components" type="object">
+  Status of individual components.
+  
+  <Expandable title="components">
+    <ResponseField name="storage" type="boolean">
+      GraphStorage is initialized.
+    </ResponseField>
+    
+    <ResponseField name="query_engine" type="boolean">
+      QueryEngine is initialized.
+    </ResponseField>
+    
+    <ResponseField name="query_parser" type="boolean">
+      QueryParser is initialized.
+    </ResponseField>
+    
+    <ResponseField name="neo4j" type="boolean">
+      Neo4j database connection is active.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:8000/api/health
+```
+
+```python Python
+import requests
+
+response = requests.get("http://localhost:8000/api/health")
+health = response.json()
+
+if health['status'] == 'healthy':
+    print("System is healthy")
+else:
+    print("System is degraded")
+    print(f"Components: {health['components']}")
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:8000/api/health');
+const health = await response.json();
+
+if (health.status === 'healthy') {
+  console.log('System is healthy');
+} else {
+  console.log('System is degraded:', health.components);
+}
+```
+
+</CodeGroup>
+
+### Healthy Response
+
+```json
+{
+  "status": "healthy",
+  "components": {
+    "storage": true,
+    "query_engine": true,
+    "query_parser": true,
+    "neo4j": true
+  }
+}
+```
+
+### Degraded Response
+
+```json
+{
+  "status": "degraded",
+  "components": {
+    "storage": true,
+    "query_engine": true,
+    "query_parser": true,
+    "neo4j": false
+  }
+}
+```
+
+## Use Cases
+
+### Kubernetes Liveness Probe
+
+Configure Kubernetes to monitor application health:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ekg-app
+spec:
+  containers:
+  - name: app
+    image: ekg:latest
+    livenessProbe:
+      httpGet:
+        path: /api/health
+        port: 8000
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+```
+
+### Docker Healthcheck
+
+Add health check to Dockerfile:
+
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:8000/api/health || exit 1
+```
+
+### Load Balancer Health Check
+
+Configure load balancer to route traffic only to healthy instances:
+
+```nginx
+upstream ekg_backend {
+  server ekg-1.internal:8000;
+  server ekg-2.internal:8000;
+  server ekg-3.internal:8000;
+}
+
+server {
+  location / {
+    proxy_pass http://ekg_backend;
+    
+    # Health check
+    health_check uri=/api/health interval=10s fails=3 passes=2;
+  }
+}
+```
+
+### Monitoring Script
+
+Periodic health monitoring:
+
+```python
+import requests
+import time
+from datetime import datetime
+
+def check_health():
+    try:
+        response = requests.get(
+            "http://localhost:8000/api/health",
+            timeout=5
+        )
+        health = response.json()
+        
+        if health['status'] != 'healthy':
+            send_alert(
+                f"EKG health degraded at {datetime.now()}",
+                health['components']
+            )
+        
+        return health
+        
+    except requests.exceptions.RequestException as e:
+        send_alert(f"EKG health check failed: {e}")
+        return None
+
+while True:
+    health = check_health()
+    if health:
+        print(f"[{datetime.now()}] Status: {health['status']}")
+    time.sleep(60)  # Check every minute
+```
+
+### Prometheus Integration
+
+Export health metrics to Prometheus:
+
+```python
+from prometheus_client import Gauge, generate_latest
+from fastapi import Response
+
+# Define metrics
+health_status = Gauge('ekg_health_status', 'Overall health status (1=healthy, 0=degraded)')
+component_status = Gauge('ekg_component_status', 'Component status', ['component'])
+
+@app.get("/metrics")
+async def metrics():
+    # Update metrics from health check
+    health = await health_check()
+    
+    health_status.set(1 if health['status'] == 'healthy' else 0)
+    
+    for component, status in health['components'].items():
+        component_status.labels(component=component).set(1 if status else 0)
+    
+    return Response(content=generate_latest(), media_type="text/plain")
+```
+
+## Implementation
+
+From `chat/app.py:196-219`:
+
+```python
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint."""
+    global storage, query_engine, query_parser
+    
+    status = {
+        "status": "healthy",
+        "components": {
+            "storage": storage is not None,
+            "query_engine": query_engine is not None,
+            "query_parser": query_parser is not None
+        }
+    }
+    
+    # Test Neo4j connection
+    try:
+        if storage:
+            storage.execute_cypher("RETURN 1")
+            status["components"]["neo4j"] = True
+    except Exception:
+        status["components"]["neo4j"] = False
+        status["status"] = "degraded"
+    
+    return status
+```
+
+## Component Checks
+
+### Storage Check
+
+Verifies `GraphStorage` object is initialized:
+
+```python
+"storage": storage is not None
+```
+
+### Query Engine Check
+
+Verifies `QueryEngine` object is initialized:
+
+```python
+"query_engine": query_engine is not None
+```
+
+### Query Parser Check
+
+Verifies `QueryParser` object is initialized:
+
+```python
+"query_parser": query_parser is not None
+```
+
+### Neo4j Check
+
+Executes a test query against Neo4j:
+
+```python
+try:
+    storage.execute_cypher("RETURN 1")
+    status["components"]["neo4j"] = True
+except Exception:
+    status["components"]["neo4j"] = False
+    status["status"] = "degraded"
+```
+
+## Status Interpretation
+
+<Accordion title="All components true">
+  System is fully operational. All queries should work.
+</Accordion>
+
+<Accordion title="Neo4j false">
+  Database connection lost. Queries will fail. Check:
+  - Neo4j container is running
+  - Network connectivity
+  - NEO4J_URI configuration
+</Accordion>
+
+<Accordion title="Query parser false">
+  Natural language queries won't work. Check:
+  - GEMINI_API_KEY is valid
+  - Internet connectivity for Gemini API
+  - Application startup logs
+</Accordion>
+
+<Accordion title="Storage or query_engine false">
+  Core components failed to initialize. Check:
+  - Application startup logs
+  - Neo4j connectivity
+  - Configuration files
+</Accordion>
+
+## Response Times
+
+Expected response times:
+
+- **Healthy**: < 100ms
+- **Neo4j slow**: 500ms - 5s
+- **Timeout**: > 5s (connection issues)
+
+<Tip>
+  Set health check timeouts to at least 5 seconds to avoid false positives during Neo4j slowness.
+</Tip>
+
+## Best Practices
+
+<Steps>
+  <Step title="Monitor continuously">
+    Check health at regular intervals (30-60 seconds).
+  </Step>
+
+  <Step title="Alert on degraded">
+    Trigger alerts when status becomes degraded:
+    
+    ```python
+    if health['status'] == 'degraded':
+        send_alert(health['components'])
+    ```
+  </Step>
+
+  <Step title="Correlate with metrics">
+    Compare health status with:
+    - Request latency
+    - Error rates
+    - Neo4j query times
+  </Step>
+
+  <Step title="Graceful degradation">
+    Handle degraded state gracefully:
+    - Return cached results
+    - Show user-friendly error messages
+    - Retry with exponential backoff
+  </Step>
+</Steps>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Monitoring Guide" icon="chart-line" href="/operations/monitoring">
+    Complete monitoring setup
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Fix common issues
+  </Card>
+</CardGroup>

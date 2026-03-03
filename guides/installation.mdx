@@ -1,0 +1,338 @@
+---
+title: Installation Guide
+description: Complete installation instructions for the Engineering Knowledge Graph
+---
+
+The Engineering Knowledge Graph can be installed using Docker (recommended) or manually with Python. This guide covers both installation methods.
+
+## Prerequisites
+
+Before installing EKG, ensure you have the following:
+
+- **Docker and Docker Compose** (for Docker installation)
+- **Python 3.11+** (for manual installation)
+- **Neo4j 5.x** (automatically provided with Docker, or install separately)
+- **Gemini API Key** from [Google AI Studio](https://aistudio.google.com/app/api-keys)
+
+## Docker Installation (Recommended)
+
+Docker provides the fastest way to get started with EKG, as it handles all dependencies automatically.
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the EKG repository to your local machine:
+    
+    ```bash
+    git clone https://github.com/truthixify/ekg
+    cd ekg
+    ```
+  </Step>
+
+  <Step title="Configure environment variables">
+    Copy the example environment file and add your Gemini API key:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit the `.env` file and set your API key:
+    
+    ```bash .env
+    GEMINI_API_KEY=your_gemini_api_key_here
+    NEO4J_URI=bolt://localhost:7687
+    NEO4J_USER=neo4j
+    NEO4J_PASSWORD=password
+    ```
+    
+    <Note>
+      Get your Gemini API key from [Google AI Studio](https://aistudio.google.com/app/api-keys). The free tier is sufficient for development.
+    </Note>
+  </Step>
+
+  <Step title="Start the services">
+    Launch both Neo4j and the EKG application using Docker Compose:
+    
+    ```bash
+    docker-compose up
+    ```
+    
+    This command will:
+    - Pull the Neo4j 5.15 image
+    - Build the EKG application container
+    - Start both services with proper networking
+    - Mount your data directory for configuration files
+  </Step>
+
+  <Step title="Verify the installation">
+    Once the services are running, verify the installation:
+    
+    - **Web Interface**: Open http://localhost:8000 in your browser
+    - **Neo4j Browser**: Access http://localhost:7474 (username: `neo4j`, password: `password`)
+    - **Health Check**: Visit http://localhost:8000/api/health
+    
+    You should see the EKG chat interface and be able to query the knowledge graph.
+  </Step>
+</Steps>
+
+### Docker Services
+
+The `docker-compose.yml` file defines two services:
+
+<CodeGroup>
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  neo4j:
+    image: neo4j:5.15
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ekg-app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - .:/app
+    command: ["python", "-m", "uvicorn", "chat.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+```
+</CodeGroup>
+
+## Manual Installation
+
+For development or custom deployments, you can install EKG manually.
+
+<Steps>
+  <Step title="Install Neo4j">
+    Download and install Neo4j 5.x from the [official website](https://neo4j.com/download/) or use a cloud instance.
+    
+    Start Neo4j and note the connection details:
+    - URI: `bolt://localhost:7687`
+    - Username: `neo4j`
+    - Password: Set during first startup
+  </Step>
+
+  <Step title="Clone and setup Python environment">
+    Clone the repository and create a virtual environment:
+    
+    ```bash
+    git clone https://github.com/truthixify/ekg
+    cd ekg
+    
+    # Create virtual environment
+    python3.11 -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install required Python packages:
+    
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+    The required packages include:
+    
+    <CodeGroup>
+    ```txt requirements.txt
+    fastapi==0.128.0
+    uvicorn==0.40.0
+    neo4j==6.0.3
+    pydantic==2.11.3
+    pyyaml==6.0.3
+    google-genai==1.56.0
+    python-multipart==0.0.21
+    jinja2==3.1.6
+    python-dotenv==1.1.0
+    pytest==7.4.3
+    pytest-asyncio==0.21.1
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Configure environment">
+    Create a `.env` file with your configuration:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit the file with your Neo4j and Gemini credentials:
+    
+    ```bash .env
+    GEMINI_API_KEY=your_gemini_api_key_here
+    NEO4J_URI=bolt://localhost:7687
+    NEO4J_USER=neo4j
+    NEO4J_PASSWORD=your_neo4j_password
+    ```
+  </Step>
+
+  <Step title="Initialize the system">
+    Run the initialization script to load data and verify the setup:
+    
+    ```bash
+    python main.py
+    ```
+    
+    This will:
+    - Validate environment variables
+    - Check for required data files
+    - Connect to Neo4j
+    - Parse configuration files
+    - Populate the knowledge graph
+    
+    You should see output like:
+    
+    ```
+    INFO - Connecting to Neo4j...
+    INFO - Loading configuration data...
+    INFO - Loaded 7 nodes and 12 edges from Docker Compose
+    INFO - Loaded 4 nodes and 10 edges from Teams
+    INFO - Successfully loaded 11 nodes and 22 edges
+    INFO - Found 7 services in the graph
+    INFO - System initialization completed successfully!
+    ```
+  </Step>
+
+  <Step title="Start the web server">
+    Launch the FastAPI application:
+    
+    ```bash
+    python -m uvicorn chat.app:app --reload --port 8000
+    ```
+    
+    For production, use without `--reload`:
+    
+    ```bash
+    python -m uvicorn chat.app:app --host 0.0.0.0 --port 8000
+    ```
+  </Step>
+</Steps>
+
+## Verification
+
+After installation, verify that all components are working:
+
+<CodeGroup>
+```bash Health Check
+curl http://localhost:8000/api/health
+```
+
+```json Response
+{
+  "status": "healthy",
+  "components": {
+    "storage": true,
+    "query_engine": true,
+    "query_parser": true,
+    "neo4j": true
+  }
+}
+```
+</CodeGroup>
+
+<CodeGroup>
+```bash Test Query
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "List all services", "session_id": "test"}'
+```
+
+```json Response
+{
+  "response": "Found 7 services: api-gateway, auth-service, order-service, payment-service, inventory-service, notification-service, recommendation-service",
+  "query_type": "list",
+  "confidence": 0.95,
+  "raw_result": [...]
+}
+```
+</CodeGroup>
+
+## Troubleshooting
+
+<Warning>
+  Common installation issues and solutions:
+</Warning>
+
+### Neo4j Connection Failed
+
+If you see `Failed to connect to Neo4j` errors:
+
+1. **Check Neo4j is running**: Visit http://localhost:7474
+2. **Verify credentials**: Ensure `.env` has correct username/password
+3. **Wait for startup**: Neo4j may take 10-20 seconds to fully start
+4. **Check Docker logs**: `docker-compose logs neo4j`
+
+### Missing Gemini API Key
+
+If you see `Missing required environment variables: GEMINI_API_KEY`:
+
+1. Get an API key from [Google AI Studio](https://aistudio.google.com/app/api-keys)
+2. Add it to your `.env` file
+3. Restart the application
+
+### Port Already in Use
+
+If port 8000 or 7687 is already in use:
+
+```bash
+# Find process using the port
+lsof -i :8000
+
+# Kill the process or use different ports
+docker-compose down
+```
+
+Edit `docker-compose.yml` to use different ports:
+
+```yaml
+ports:
+  - "8001:8000"  # Use 8001 instead of 8000
+```
+
+### Data Files Not Found
+
+If you see `Missing required data files`:
+
+```bash
+# Create data directory
+mkdir -p data
+
+# Add example configuration files
+cp examples/docker-compose.yml data/
+cp examples/teams.yaml data/
+```
+
+## Next Steps
+
+Now that EKG is installed:
+
+- [Configure data sources](/guides/data-sources) to add your infrastructure data
+- [Learn how to query](/guides/querying) the knowledge graph
+- [Customize environment variables](/guides/configuration) for your setup

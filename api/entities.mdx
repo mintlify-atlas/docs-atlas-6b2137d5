@@ -1,0 +1,271 @@
+---
+title: GET /api/entities
+description: Get available entities for autocomplete and validation
+---
+
+The `/api/entities` endpoint returns all entities in the knowledge graph, useful for building autocomplete features or validating user input.
+
+## Endpoint
+
+```
+GET /api/entities
+```
+
+## Response
+
+Returns a dictionary organized by entity type, with each type containing a list of entity names.
+
+<ResponseField name="services" type="string[]">
+  List of all service names in the graph.
+</ResponseField>
+
+<ResponseField name="databases" type="string[]">
+  List of all database names in the graph.
+</ResponseField>
+
+<ResponseField name="caches" type="string[]">
+  List of all cache names in the graph.
+</ResponseField>
+
+<ResponseField name="teams" type="string[]">
+  List of all team names in the graph.
+</ResponseField>
+
+<ResponseField name="deployments" type="string[]">
+  List of all deployment names in the graph (if using Kubernetes connector).
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl http://localhost:8000/api/entities
+```
+
+```python Python
+import requests
+
+response = requests.get("http://localhost:8000/api/entities")
+entities = response.json()
+
+print("Available services:")
+for service in entities['services']:
+    print(f"  - {service}")
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:8000/api/entities');
+const entities = await response.json();
+
+console.log('Available services:', entities.services);
+```
+
+```json Response
+{
+  "services": [
+    "api-gateway",
+    "order-service",
+    "payment-service",
+    "notification-service"
+  ],
+  "databases": [
+    "users-db",
+    "orders-db",
+    "payments-db"
+  ],
+  "caches": [
+    "redis-main"
+  ],
+  "teams": [
+    "Platform",
+    "Orders",
+    "Payments",
+    "Notifications"
+  ],
+  "deployments": [
+    "order-service-deployment",
+    "payment-service-deployment"
+  ]
+}
+```
+
+</CodeGroup>
+
+## Use Cases
+
+### Autocomplete UI
+
+Build an autocomplete dropdown for query input:
+
+```javascript
+// Fetch all entities on page load
+const entities = await fetch('/api/entities').then(r => r.json());
+
+// Flatten all entity names
+const allNames = [
+  ...entities.services,
+  ...entities.databases,
+  ...entities.caches,
+  ...entities.teams
+];
+
+// Autocomplete function
+function autocomplete(input) {
+  return allNames.filter(name => 
+    name.toLowerCase().includes(input.toLowerCase())
+  );
+}
+```
+
+### Input Validation
+
+Validate user input before querying:
+
+```python
+import requests
+
+def validate_entity(entity_name: str) -> bool:
+    """Check if an entity exists in the graph."""
+    response = requests.get("http://localhost:8000/api/entities")
+    entities = response.json()
+    
+    # Check all entity types
+    all_entities = (
+        entities['services'] +
+        entities['databases'] +
+        entities['caches'] +
+        entities['teams']
+    )
+    
+    return entity_name in all_entities
+
+# Example usage
+user_input = "order-service"
+if validate_entity(user_input):
+    # Proceed with query
+    query_result = query(f"What does {user_input} depend on?")
+else:
+    print(f"Entity '{user_input}' not found in knowledge graph")
+```
+
+### Graph Statistics
+
+Generate statistics about your infrastructure:
+
+```python
+import requests
+
+response = requests.get("http://localhost:8000/api/entities")
+entities = response.json()
+
+print(f"Total services: {len(entities['services'])}")
+print(f"Total databases: {len(entities['databases'])}")
+print(f"Total caches: {len(entities['caches'])}")
+print(f"Total teams: {len(entities['teams'])}")
+print(f"Total entities: {sum(len(v) for v in entities.values())}")
+```
+
+### Entity Type Detection
+
+Determine the type of an entity:
+
+```python
+def get_entity_type(entity_name: str) -> str:
+    """Get the type of an entity."""
+    response = requests.get("http://localhost:8000/api/entities")
+    entities = response.json()
+    
+    for entity_type, names in entities.items():
+        if entity_name in names:
+            return entity_type.rstrip('s')  # Remove plural
+    
+    return None
+
+# Example
+entity_type = get_entity_type("order-service")
+print(f"order-service is a {entity_type}")  # "service"
+```
+
+## Error Handling
+
+### Query Parser Not Initialized
+
+```json
+{
+  "detail": "Query parser not initialized"
+}
+```
+
+**Status Code**: 500
+
+**Cause**: The application failed to initialize. Check:
+- Neo4j connection
+- Configuration files are loaded
+- Application startup logs
+
+## Implementation
+
+From `chat/app.py:169-182`:
+
+```python
+@app.get("/api/entities")
+async def get_entities():
+    """Get available entities for autocomplete."""
+    global query_parser
+    
+    if not query_parser:
+        raise HTTPException(status_code=500, detail="Query parser not initialized")
+    
+    try:
+        entities = query_parser.get_available_entities()
+        return entities
+    except Exception as e:
+        logger.error(f"Failed to get entities: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+## Performance
+
+<Info>
+  This endpoint queries Neo4j to get all nodes by type. With thousands of entities, consider caching the response or implementing pagination.
+</Info>
+
+### Caching Example
+
+```python
+from functools import lru_cache
+from datetime import datetime, timedelta
+
+# Cache for 5 minutes
+cache_expiry = None
+cached_entities = None
+
+@app.get("/api/entities")
+async def get_entities():
+    global cache_expiry, cached_entities
+    
+    # Check cache
+    if cache_expiry and datetime.now() < cache_expiry:
+        return cached_entities
+    
+    # Fetch fresh data
+    entities = query_parser.get_available_entities()
+    
+    # Update cache
+    cached_entities = entities
+    cache_expiry = datetime.now() + timedelta(minutes=5)
+    
+    return entities
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Query Endpoint" icon="message-question" href="/api/query">
+    Use entities in natural language queries
+  </Card>
+  <Card title="Query Engine" icon="diagram-project" href="/api/query-engine/overview">
+    Explore the underlying query methods
+  </Card>
+</CardGroup>

@@ -1,0 +1,258 @@
+---
+title: "TeamsConnector"
+description: "Connector for parsing teams configuration YAML files into knowledge graph nodes and edges"
+---
+
+## Overview
+
+The `TeamsConnector` parses `teams.yaml` files to extract team information and service ownership relationships. It creates team nodes and establishes ownership edges between teams and their services, databases, and caches.
+
+## Class Definition
+
+```python
+from connectors import TeamsConnector
+
+connector = TeamsConnector()
+nodes, edges = connector.parse("teams.yaml")
+```
+
+Source: connectors/teams.py:10-14
+
+## Methods
+
+### parse()
+
+Parse a teams.yaml file and extract team nodes and ownership edges.
+
+```python
+def parse(self, file_path: str) -> tuple[List[Node], List[Edge]]:
+    """Parse teams.yaml file."""
+    self.logger.info(f"Parsing teams file: {file_path}")
+    
+    try:
+        with open(file_path, 'r') as f:
+            teams_data = yaml.safe_load(f)
+    except Exception as e:
+        self.logger.error(f"Failed to parse {file_path}: {e}")
+        return [], []
+    
+    nodes = []
+    edges = []
+    
+    teams = teams_data.get('teams', [])
+    
+    for team_config in teams:
+        team_name = team_config.get('name')
+        if not team_name:
+            continue
+        
+        # Create team node
+        team_node = self._create_team_node(team_config)
+        nodes.append(team_node)
+        
+        # Create ownership edges
+        owned_services = team_config.get('owns', [])
+        for service_name in owned_services:
+            # Determine service type based on name patterns
+            service_type = self._infer_service_type(service_name)
+            
+            edge = self._create_edge(
+                'owns',
+                team_node.id,
+                f"{service_type}:{service_name}"
+            )
+            edges.append(edge)
+    
+    self.logger.info(f"Parsed {len(nodes)} nodes and {len(edges)} edges from teams")
+    return nodes, edges
+```
+
+Source: connectors/teams.py:16-55
+
+<ParamField path="file_path" type="string" required>
+  Path to the teams.yaml file
+</ParamField>
+
+**Returns:** `tuple[List[Node], List[Edge]]`
+
+Extracted data includes:
+- **Team nodes** with properties: lead, slack_channel, pagerduty_schedule
+- **owns edges** linking teams to their services, databases, and caches
+
+### _create_team_node()
+
+Create a team node from team configuration.
+
+```python
+def _create_team_node(self, team_config: Dict[str, Any]) -> Node:
+    """Create a team node from team configuration."""
+    team_name = team_config['name']
+    
+    properties = {
+        'lead': team_config.get('lead'),
+        'slack_channel': team_config.get('slack_channel'),
+        'pagerduty_schedule': team_config.get('pagerduty_schedule')
+    }
+    
+    # Filter out None values
+    properties = {k: v for k, v in properties.items() if v is not None}
+    
+    return self._create_node('team', team_name, properties)
+```
+
+Source: connectors/teams.py:57-70
+
+<ParamField path="team_config" type="Dict[str, Any]" required>
+  Team configuration dictionary from teams.yaml
+</ParamField>
+
+**Returns:** `Node` with type "team"
+
+Node properties include:
+- `lead`: Team lead name
+- `slack_channel`: Slack channel for team communication
+- `pagerduty_schedule`: PagerDuty schedule ID or name
+
+### _infer_service_type()
+
+Infer service type from service name patterns.
+
+```python
+def _infer_service_type(self, service_name: str) -> str:
+    """Infer service type from service name patterns."""
+    name_lower = service_name.lower()
+    
+    if 'db' in name_lower or 'database' in name_lower:
+        return 'database'
+    elif 'redis' in name_lower or 'cache' in name_lower:
+        return 'cache'
+    else:
+        return 'service'
+```
+
+Source: connectors/teams.py:72-81
+
+<ParamField path="service_name" type="string" required>
+  Name of the service
+</ParamField>
+
+**Returns:** `str` - One of: "service", "database", "cache"
+
+Type inference rules:
+- Contains "db" or "database" → "database"
+- Contains "redis" or "cache" → "cache"
+- Otherwise → "service" (default)
+
+## Usage Example
+
+```python
+from connectors import TeamsConnector
+
+# Initialize connector
+connector = TeamsConnector()
+
+# Parse teams.yaml
+nodes, edges = connector.parse("./teams.yaml")
+
+# Process results
+for node in nodes:
+    print(f"Team: {node.name}")
+    if node.properties.get('lead'):
+        print(f"  Lead: {node.properties['lead']}")
+    if node.properties.get('slack_channel'):
+        print(f"  Slack: #{node.properties['slack_channel']}")
+    if node.properties.get('pagerduty_schedule'):
+        print(f"  PagerDuty: {node.properties['pagerduty_schedule']}")
+
+for edge in edges:
+    print(f"Ownership: {edge.source} owns {edge.target}")
+```
+
+## Example Teams YAML
+
+```yaml
+teams:
+  - name: platform
+    lead: Alice Johnson
+    slack_channel: platform-team
+    pagerduty_schedule: PLATFORM_PRIMARY
+    owns:
+      - api-gateway
+      - auth-service
+      - redis-cache
+  
+  - name: identity
+    lead: Bob Smith
+    slack_channel: identity-team
+    pagerduty_schedule: IDENTITY_PRIMARY
+    owns:
+      - user-service
+      - profile-service
+      - user-db
+  
+  - name: payments
+    lead: Carol Williams
+    slack_channel: payments-team
+    pagerduty_schedule: PAYMENTS_PRIMARY
+    owns:
+      - payment-service
+      - billing-service
+      - payment-db
+      - payment-redis
+  
+  - name: data
+    lead: David Brown
+    slack_channel: data-engineering
+    owns:
+      - analytics-pipeline
+      - data-warehouse
+```
+
+**Resulting Graph:**
+
+**Nodes:**
+- `team:platform` (lead: Alice Johnson, slack_channel: platform-team, pagerduty_schedule: PLATFORM_PRIMARY)
+- `team:identity` (lead: Bob Smith, slack_channel: identity-team, pagerduty_schedule: IDENTITY_PRIMARY)
+- `team:payments` (lead: Carol Williams, slack_channel: payments-team, pagerduty_schedule: PAYMENTS_PRIMARY)
+- `team:data` (lead: David Brown, slack_channel: data-engineering)
+
+**Edges:**
+- `team:platform` --owns--> `service:api-gateway`
+- `team:platform` --owns--> `service:auth-service`
+- `team:platform` --owns--> `cache:redis-cache`
+- `team:identity` --owns--> `service:user-service`
+- `team:identity` --owns--> `service:profile-service`
+- `team:identity` --owns--> `database:user-db`
+- `team:payments` --owns--> `service:payment-service`
+- `team:payments` --owns--> `service:billing-service`
+- `team:payments` --owns--> `database:payment-db`
+- `team:payments` --owns--> `cache:payment-redis`
+- `team:data` --owns--> `service:analytics-pipeline`
+- `team:data` --owns--> `database:data-warehouse`
+
+## Integration with Other Connectors
+
+The TeamsConnector is designed to work alongside other connectors like DockerComposeConnector and KubernetesConnector. By combining their outputs, you can build a complete knowledge graph that includes:
+
+- Service definitions and dependencies (from Docker Compose or Kubernetes)
+- Team ownership and contact information (from Teams)
+- Complete service-to-team mappings
+
+```python
+from connectors import DockerComposeConnector, TeamsConnector
+
+# Parse both files
+docker_connector = DockerComposeConnector()
+teams_connector = TeamsConnector()
+
+service_nodes, service_edges = docker_connector.parse("docker-compose.yml")
+team_nodes, team_edges = teams_connector.parse("teams.yaml")
+
+# Combine results
+all_nodes = service_nodes + team_nodes
+all_edges = service_edges + team_edges
+
+# Now you have a complete graph with services, dependencies, and ownership
+print(f"Total nodes: {len(all_nodes)}")
+print(f"Total relationships: {len(all_edges)}")
+```

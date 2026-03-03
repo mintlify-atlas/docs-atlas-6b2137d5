@@ -1,0 +1,696 @@
+---
+title: "Troubleshooting"
+description: "Common issues and solutions for the Engineering Knowledge Graph"
+icon: "screwdriver-wrench"
+---
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Connection Refused: Neo4j Not Available">
+    ### Symptoms
+    ```
+    ERROR - Failed to connect to Neo4j: Connection refused
+    neo4j.exceptions.ServiceUnavailable: Unable to retrieve routing information
+    ```
+    
+    ### Causes
+    - Neo4j service not running
+    - Neo4j not finished initializing
+    - Incorrect connection URI
+    - Network connectivity issues
+    
+    ### Solutions
+    
+    **1. Check Neo4j service status**
+    ```bash
+    docker-compose ps neo4j
+    ```
+    
+    **2. Verify Neo4j is healthy**
+    ```bash
+    docker-compose logs neo4j | tail -20
+    ```
+    
+    Look for:
+    ```
+    INFO  Bolt enabled on [::]:7687.
+    INFO  Remote interface available at http://localhost:7474/
+    ```
+    
+    **3. Test Neo4j connection directly**
+    ```bash
+    docker-compose exec neo4j cypher-shell -u neo4j -p password
+    ```
+    
+    **4. Restart services in correct order**
+    ```bash
+    docker-compose down
+    docker-compose up neo4j -d
+    # Wait 30 seconds for Neo4j to start
+    docker-compose up ekg-app
+    ```
+    
+    **5. Check connection URI format**
+    
+    The URI should use the `bolt://` protocol:
+    ```env
+    NEO4J_URI=bolt://neo4j:7687  # Correct
+    NEO4J_URI=http://neo4j:7687   # Wrong
+    ```
+    
+    <Info>
+      The `depends_on` with health check in docker-compose.yml ensures Neo4j is ready:
+      ```yaml
+      depends_on:
+        neo4j:
+          condition: service_healthy
+      ```
+    </Info>
+  </Accordion>
+
+  <Accordion title="Missing GEMINI_API_KEY Environment Variable">
+    ### Symptoms
+    ```
+    ERROR - Missing required environment variables: GEMINI_API_KEY
+    ValueError: GEMINI_API_KEY environment variable is required
+    ```
+    
+    ### Causes
+    - `.env` file not created
+    - Environment variable not set in `.env` file
+    - `.env` file not in project root directory
+    
+    ### Solutions
+    
+    **1. Create .env file from template**
+    ```bash
+    cp .env.example .env
+    ```
+    
+    **2. Add your Gemini API key**
+    
+    Edit `.env` and add your key:
+    ```env .env
+    GEMINI_API_KEY=your_actual_api_key_here
+    NEO4J_URI=bolt://localhost:7687
+    NEO4J_USER=neo4j
+    NEO4J_PASSWORD=password
+    ```
+    
+    **3. Get a Gemini API key**
+    
+    Visit [Google AI Studio](https://aistudio.google.com/app/apikey) to generate an API key.
+    
+    **4. Restart the application**
+    ```bash
+    docker-compose restart ekg-app
+    ```
+    
+    **5. Verify environment variables are loaded**
+    ```bash
+    docker-compose exec ekg-app env | grep GEMINI
+    ```
+    
+    <Warning>
+      Never commit your `.env` file to version control. The `.gitignore` file should include `.env`.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Configuration Files Not Found">
+    ### Symptoms
+    ```
+    ERROR - Missing required data files: data/docker-compose.yml, data/teams.yaml
+    ```
+    
+    ### Causes
+    - Data files not in `data/` directory
+    - Incorrect file names
+    - Files not mounted in Docker container
+    
+    ### Solutions
+    
+    **1. Check data directory exists**
+    ```bash
+    ls -la data/
+    ```
+    
+    **2. Verify required files**
+    
+    Required files (see main.py:40-55):
+    - `data/docker-compose.yml` - Service definitions
+    - `data/teams.yaml` - Team ownership data
+    
+    Optional files:
+    - `data/k8s-deployments.yaml` - Kubernetes deployments
+    
+    **3. Create sample data files**
+    
+    If you don't have configuration files yet, create minimal examples:
+    
+    ```yaml data/docker-compose.yml
+    version: '3.8'
+    services:
+      example-service:
+        image: nginx:latest
+        ports:
+          - "80:80"
+        labels:
+          team: "platform"
+          oncall: "@platform-oncall"
+    ```
+    
+    ```yaml data/teams.yaml
+    teams:
+      - name: "Platform"
+        lead: "Alice Johnson"
+        slack_channel: "#platform-team"
+        pagerduty_schedule: "platform-oncall"
+        owns:
+          - "example-service"
+    ```
+    
+    **4. Verify volume mount**
+    
+    The `docker-compose.yml` should mount the data directory:
+    ```yaml
+    volumes:
+      - ./data:/app/data
+    ```
+    
+    **5. Reload configuration**
+    ```bash
+    curl -X POST http://localhost:8000/api/reload
+    ```
+  </Accordion>
+
+  <Accordion title="Query Parser Initialization Failed">
+    ### Symptoms
+    ```
+    ERROR - Failed to initialize application: Failed to parse query intent
+    HTTPException: 500 - Query parser not initialized
+    ```
+    
+    ### Causes
+    - Gemini API authentication failure
+    - Invalid API key
+    - Network connectivity to Google AI
+    - API rate limiting
+    
+    ### Solutions
+    
+    **1. Verify API key is valid**
+    
+    Test the API key directly:
+    ```python
+    import google.genai as genai
+    client = genai.Client(api_key='your_api_key')
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents='Hello'
+    )
+    print(response.text)
+    ```
+    
+    **2. Check application logs**
+    ```bash
+    docker-compose logs ekg-app | grep -i gemini
+    ```
+    
+    **3. Check API quota**
+    
+    Visit [Google AI Studio](https://aistudio.google.com/) to check your API quota and usage.
+    
+    **4. Verify network connectivity**
+    ```bash
+    docker-compose exec ekg-app curl -I https://generativelanguage.googleapis.com
+    ```
+    
+    **5. Check for API errors**
+    
+    The LLM initialization in chat/llm.py:17-24 will raise an error if the API key is invalid:
+    ```python
+    self.api_key = api_key or os.getenv('GEMINI_API_KEY')
+    if not self.api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is required")
+    ```
+  </Accordion>
+
+  <Accordion title="Health Check Returns Degraded Status">
+    ### Symptoms
+    ```json
+    {
+      "status": "degraded",
+      "components": {
+        "storage": true,
+        "query_engine": true,
+        "query_parser": true,
+        "neo4j": false
+      }
+    }
+    ```
+    
+    ### Causes
+    - Neo4j connection established but query execution failing
+    - Database locked or in read-only mode
+    - Cypher query syntax error
+    
+    ### Solutions
+    
+    **1. Test Neo4j directly**
+    ```bash
+    docker-compose exec neo4j cypher-shell -u neo4j -p password "RETURN 1"
+    ```
+    
+    **2. Check Neo4j logs for errors**
+    ```bash
+    docker-compose logs neo4j | grep -i error
+    ```
+    
+    **3. Verify database is writable**
+    ```bash
+    docker-compose exec neo4j cypher-shell -u neo4j -p password "CREATE (n:Test) RETURN n"
+    ```
+    
+    **4. Check disk space**
+    ```bash
+    docker system df
+    df -h
+    ```
+    
+    **5. Restart Neo4j**
+    ```bash
+    docker-compose restart neo4j
+    # Wait for health check
+    docker-compose ps neo4j
+    ```
+    
+    The health check implementation (chat/app.py:211-217) tests the connection:
+    ```python
+    try:
+        if storage:
+            storage.execute_cypher("RETURN 1")
+            status["components"]["neo4j"] = True
+    except Exception:
+        status["components"]["neo4j"] = False
+        status["status"] = "degraded"
+    ```
+  </Accordion>
+
+  <Accordion title="Configuration Validation Errors">
+    ### Symptoms
+    ```
+    ❌ ISSUES FOUND (3):
+      1. Service 'payment-service' depends on undefined service 'redis'
+      2. Team 'Backend' references non-existent team 'Platform'
+      3. No services defined in docker-compose.yml
+    ```
+    
+    ### Causes
+    - Inconsistent service references
+    - Missing service definitions
+    - Circular dependencies
+    - Invalid YAML syntax
+    
+    ### Solutions
+    
+    **1. Run validation script**
+    ```bash
+    python scripts/validate_config.py
+    ```
+    
+    **2. Fix service dependencies**
+    
+    Ensure all referenced services exist in docker-compose.yml (see scripts/validate_config.py:103-106):
+    ```python
+    depends_on = service_config.get('depends_on', [])
+    for dep in depends_on:
+        if dep not in service_names:
+            self.issues.append(f"Service '{service_name}' depends on undefined service '{dep}'")
+    ```
+    
+    **3. Validate YAML syntax**
+    ```bash
+    python -c "import yaml; yaml.safe_load(open('data/docker-compose.yml'))"
+    ```
+    
+    **4. Check team ownership**
+    
+    Ensure services reference existing teams (see scripts/validate_config.py:233-237):
+    ```python
+    labels = service_config.get('labels', {})
+    team = labels.get('team')
+    if team and team not in team_names:
+        self.issues.append(f"Service '{service_name}' references non-existent team '{team}'")
+    ```
+    
+    **5. Review warnings**
+    
+    Warnings indicate recommended but not required fields:
+    - Team ownership labels
+    - Oncall person labels
+    - Resource limits
+    
+    <Info>
+      Configuration validation runs automatically during initialization (main.py:164-166), but won't prevent startup if only warnings are found.
+    </Info>
+  </Accordion>
+
+  <Accordion title="Graph Database Empty After Loading">
+    ### Symptoms
+    ```
+    INFO - Total loaded: 0 nodes and 0 edges
+    INFO - Found 0 services in the graph
+    ```
+    
+    ### Causes
+    - Configuration files empty or invalid
+    - Parsing errors silently failing
+    - Graph cleared but not repopulated
+    
+    ### Solutions
+    
+    **1. Check configuration file content**
+    ```bash
+    cat data/docker-compose.yml
+    cat data/teams.yaml
+    ```
+    
+    **2. Verify parsing logs**
+    ```bash
+    docker-compose logs ekg-app | grep "Loaded"
+    ```
+    
+    Should show:
+    ```
+    INFO - Loaded 25 nodes and 48 edges from Docker Compose
+    INFO - Loaded 5 nodes and 12 edges from Teams
+    ```
+    
+    **3. Query Neo4j directly**
+    ```bash
+    docker-compose exec neo4j cypher-shell -u neo4j -p password "MATCH (n) RETURN count(n)"
+    ```
+    
+    **4. Check for parsing errors**
+    
+    Look for connector errors in logs:
+    ```bash
+    docker-compose logs ekg-app | grep -i "error\|exception"
+    ```
+    
+    **5. Manually trigger data reload**
+    ```bash
+    curl -X POST http://localhost:8000/api/reload
+    ```
+    
+    The data loading process (chat/app.py:90-134) should log progress:
+    ```python
+    logger.info(f"Loaded {len(nodes)} nodes and {len(edges)} edges from Docker Compose")
+    logger.info(f"Total loaded: {len(all_nodes)} nodes and {len(all_edges)} edges")
+    ```
+  </Accordion>
+
+  <Accordion title="Port Already in Use">
+    ### Symptoms
+    ```
+    ERROR: for neo4j  Cannot start service neo4j: driver failed programming external connectivity
+    Bind for 0.0.0.0:7474 failed: port is already allocated
+    ```
+    
+    ### Causes
+    - Another Neo4j instance running
+    - Port conflict with other services
+    - Previous container not cleaned up
+    
+    ### Solutions
+    
+    **1. Find process using the port**
+    ```bash
+    # Linux/Mac
+    lsof -i :7474
+    lsof -i :7687
+    lsof -i :8000
+    
+    # Or using netstat
+    netstat -tuln | grep -E '7474|7687|8000'
+    ```
+    
+    **2. Stop conflicting services**
+    ```bash
+    # If it's a Docker container
+    docker ps | grep neo4j
+    docker stop <container_id>
+    
+    # If it's a local Neo4j installation
+    sudo systemctl stop neo4j
+    ```
+    
+    **3. Clean up Docker resources**
+    ```bash
+    docker-compose down
+    docker ps -a | grep neo4j
+    docker rm -f <container_id>
+    ```
+    
+    **4. Change ports in docker-compose.yml**
+    
+    If you can't free the ports, modify the port mappings:
+    ```yaml
+    services:
+      neo4j:
+        ports:
+          - "17474:7474"  # Changed host port
+          - "17687:7687"  # Changed host port
+      
+      ekg-app:
+        ports:
+          - "18000:8000"  # Changed host port
+        environment:
+          - NEO4J_URI=bolt://neo4j:7687  # Keep internal port
+    ```
+    
+    **5. Use docker-compose down**
+    ```bash
+    docker-compose down
+    # Wait a few seconds
+    docker-compose up
+    ```
+  </Accordion>
+
+  <Accordion title="Memory or Performance Issues">
+    ### Symptoms
+    - Slow query responses
+    - High memory usage
+    - Container restarts
+    - OOM (Out of Memory) errors
+    
+    ### Causes
+    - Large graph database
+    - Insufficient container resources
+    - Memory leaks
+    - Inefficient Cypher queries
+    
+    ### Solutions
+    
+    **1. Monitor resource usage**
+    ```bash
+    docker stats
+    ```
+    
+    **2. Increase Neo4j memory limits**
+    
+    Add to docker-compose.yml:
+    ```yaml
+    services:
+      neo4j:
+        environment:
+          - NEO4J_dbms_memory_heap_initial__size=512m
+          - NEO4J_dbms_memory_heap_max__size=2G
+          - NEO4J_dbms_memory_pagecache_size=1G
+        deploy:
+          resources:
+            limits:
+              memory: 3G
+            reservations:
+              memory: 1G
+    ```
+    
+    **3. Limit application workers**
+    
+    For production, use a fixed number of workers:
+    ```yaml
+    command: ["python", "-m", "uvicorn", "chat.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    ```
+    
+    **4. Check for memory leaks**
+    ```bash
+    # Monitor over time
+    docker stats --no-stream ekg-app neo4j
+    ```
+    
+    **5. Optimize graph queries**
+    
+    Check slow queries in Neo4j:
+    ```cypher
+    // In Neo4j Browser (http://localhost:7474)
+    CALL dbms.listQueries() YIELD query, elapsedTimeMillis
+    WHERE elapsedTimeMillis > 1000
+    RETURN query, elapsedTimeMillis
+    ORDER BY elapsedTimeMillis DESC;
+    ```
+    
+    **6. Clear unused data**
+    ```bash
+    # Remove all graph data and reload
+    curl -X POST http://localhost:8000/api/reload
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Error Messages Reference
+
+### Application Errors
+
+| Error Message | Source | Solution |
+|--------------|--------|----------|
+| `Missing required environment variables` | main.py:33 | Create `.env` file with required variables |
+| `Failed to connect to Neo4j` | graph/storage.py:38 | Start Neo4j service, check connection URI |
+| `GEMINI_API_KEY environment variable is required` | chat/llm.py:21 | Set API key in `.env` file |
+| `Query parser not initialized` | chat/app.py:149 | Check LLM initialization logs |
+| `Missing required data files` | main.py:52 | Add configuration files to `data/` directory |
+| `Configuration validation found issues` | main.py:68 | Run `validate_config.py` to see details |
+
+### Neo4j Errors
+
+| Error Message | Cause | Solution |
+|--------------|-------|----------|
+| `ServiceUnavailable` | Neo4j not running | Start Neo4j with `docker-compose up neo4j` |
+| `AuthError` | Invalid credentials | Check `NEO4J_USER` and `NEO4J_PASSWORD` |
+| `ClientError: Forbidden` | Access denied | Verify Neo4j authentication |
+| `TransientError: Database unavailable` | Database starting | Wait for health check to pass |
+
+## Debugging Tips
+
+<Steps>
+  <Step title="Enable Debug Logging">
+    Increase log verbosity by setting the log level:
+    ```python
+    logging.basicConfig(level=logging.DEBUG)
+    ```
+    
+    Or via environment variable:
+    ```yaml
+    environment:
+      - LOG_LEVEL=DEBUG
+    ```
+  </Step>
+  
+  <Step title="Inspect Container State">
+    ```bash
+    # Check if containers are running
+    docker-compose ps
+    
+    # Inspect container configuration
+    docker inspect ekg-app
+    
+    # Check container logs
+    docker-compose logs --tail=100 ekg-app
+    ```
+  </Step>
+  
+  <Step title="Test Components Individually">
+    **Test Neo4j connection:**
+    ```python
+    from neo4j import GraphDatabase
+    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "password"))
+    with driver.session() as session:
+        result = session.run("RETURN 1")
+        print(result.single())
+    driver.close()
+    ```
+    
+    **Test Gemini API:**
+    ```python
+    import google.genai as genai
+    client = genai.Client(api_key='your_api_key')
+    response = client.models.generate_content(model='gemini-2.5-flash', contents='test')
+    print(response.text)
+    ```
+  </Step>
+  
+  <Step title="Verify Data Loading">
+    ```bash
+    # Check data directory
+    ls -la data/
+    
+    # Validate YAML syntax
+    python -c "import yaml; print(yaml.safe_load(open('data/docker-compose.yml')))"
+    
+    # Query graph database
+    docker-compose exec neo4j cypher-shell -u neo4j -p password "MATCH (n) RETURN labels(n), count(n)"
+    ```
+  </Step>
+  
+  <Step title="Use Interactive Shell">
+    ```bash
+    # Access container shell
+    docker-compose exec ekg-app /bin/bash
+    
+    # Run Python interactively
+    docker-compose exec ekg-app python
+    ```
+    
+    Then test components:
+    ```python
+    from graph.storage import GraphStorage
+    storage = GraphStorage()
+    nodes = storage.execute_cypher("MATCH (n) RETURN n LIMIT 10")
+    print(nodes)
+    ```
+  </Step>
+</Steps>
+
+## Getting Help
+
+<CardGroup cols={2}>
+  <Card title="Check Logs" icon="file-lines">
+    ```bash
+    docker-compose logs -f
+    ```
+    Most issues are logged with helpful error messages.
+  </Card>
+  
+  <Card title="Validate Configuration" icon="circle-check">
+    ```bash
+    python scripts/validate_config.py
+    ```
+    Find configuration issues before they cause runtime errors.
+  </Card>
+  
+  <Card title="Health Check" icon="heart-pulse">
+    ```bash
+    curl http://localhost:8000/api/health
+    ```
+    Verify all components are operational.
+  </Card>
+  
+  <Card title="Clean Restart" icon="rotate-right">
+    ```bash
+    docker-compose down -v
+    docker-compose up
+    ```
+    Start fresh when troubleshooting fails.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Guide" icon="rocket" href="/operations/deployment">
+    Learn about deployment configuration
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up health checks and monitoring
+  </Card>
+</CardGroup>

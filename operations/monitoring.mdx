@@ -1,0 +1,393 @@
+---
+title: "Monitoring & Health Checks"
+description: "Monitor the Engineering Knowledge Graph system health and performance"
+icon: "heart-pulse"
+---
+
+## Health Check Endpoint
+
+The system provides a comprehensive health check endpoint at `/api/health` that monitors all critical components.
+
+### Endpoint Details
+
+<CodeGroup>
+```bash cURL
+curl http://localhost:8000/api/health
+```
+
+```python Python
+import requests
+
+response = requests.get('http://localhost:8000/api/health')
+health_status = response.json()
+print(health_status)
+```
+
+```javascript JavaScript
+fetch('http://localhost:8000/api/health')
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+</CodeGroup>
+
+### Response Structure
+
+The health check returns a JSON response with component status (see chat/app.py:196-219):
+
+```json
+{
+  "status": "healthy",
+  "components": {
+    "storage": true,
+    "query_engine": true,
+    "query_parser": true,
+    "neo4j": true
+  }
+}
+```
+
+### Status Values
+
+<ResponseField name="status" type="string">
+  Overall system health status:
+  - `healthy`: All components operational
+  - `degraded`: Some components failing but system partially operational
+</ResponseField>
+
+<ResponseField name="components" type="object">
+  Individual component health status:
+  - `storage`: GraphStorage initialized
+  - `query_engine`: QueryEngine initialized
+  - `query_parser`: QueryParser with LLM initialized
+  - `neo4j`: Active database connection verified
+</ResponseField>
+
+## Health Check Implementation
+
+The health check endpoint is implemented in `chat/app.py`:
+
+```python chat/app.py:196-219
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint."""
+    global storage, query_engine, query_parser
+    
+    status = {
+        "status": "healthy",
+        "components": {
+            "storage": storage is not None,
+            "query_engine": query_engine is not None,
+            "query_parser": query_parser is not None
+        }
+    }
+    
+    # Test Neo4j connection
+    try:
+        if storage:
+            storage.execute_cypher("RETURN 1")
+            status["components"]["neo4j"] = True
+    except Exception:
+        status["components"]["neo4j"] = False
+        status["status"] = "degraded"
+    
+    return status
+```
+
+### Component Checks
+
+<Steps>
+  <Step title="Initialization Checks">
+    Verifies that critical components were initialized during startup:
+    - `GraphStorage` instance created
+    - `QueryEngine` instance created
+    - `QueryParser` with LLM initialized
+  </Step>
+  
+  <Step title="Neo4j Connection Test">
+    Actively tests the Neo4j database connection by executing a simple query:
+    ```python
+    storage.execute_cypher("RETURN 1")
+    ```
+    If this fails, the system status is set to "degraded".
+  </Step>
+</Steps>
+
+## Application Startup
+
+The application initializes components during the startup event (chat/app.py:58-79):
+
+```python chat/app.py:58-79
+@app.on_event("startup")
+async def startup_event():
+    """Initialize components on startup."""
+    global storage, query_engine, query_parser
+    
+    try:
+        # Initialize storage
+        storage = GraphStorage()
+        query_engine = QueryEngine(storage)
+        
+        # Initialize LLM and parser
+        llm = GeminiLLM()
+        query_parser = QueryParser(query_engine, llm)
+        
+        # Load data from configuration files
+        await load_configuration_data()
+        
+        logger.info("Application startup completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize application: {e}")
+        raise
+```
+
+### Startup Sequence
+
+<Steps>
+  <Step title="Database Connection">
+    Connect to Neo4j using environment variables (graph/storage.py:17-39):
+    ```python
+    self.uri = uri or os.getenv('NEO4J_URI', 'bolt://localhost:7687')
+    self.user = user or os.getenv('NEO4J_USER', 'neo4j')
+    self.password = password or os.getenv('NEO4J_PASSWORD', 'password')
+    
+    self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+    ```
+  </Step>
+  
+  <Step title="LLM Initialization">
+    Initialize the Gemini LLM client (chat/llm.py:17-24):
+    ```python
+    self.api_key = api_key or os.getenv('GEMINI_API_KEY')
+    if not self.api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is required")
+    
+    self.client = genai.Client(api_key=self.api_key)
+    ```
+  </Step>
+  
+  <Step title="Data Loading">
+    Load configuration data from YAML files (chat/app.py:90-134):
+    - Clear existing graph data
+    - Parse docker-compose.yml
+    - Parse teams.yaml
+    - Parse k8s-deployments.yaml (optional)
+    - Populate graph database
+  </Step>
+</Steps>
+
+## Logging
+
+The system uses Python's standard logging module with structured log messages.
+
+### Log Configuration
+
+Logging is configured in `main.py:16-20`:
+
+```python main.py:16-20
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+```
+
+### Log Levels
+
+<Tabs>
+  <Tab title="INFO">
+    Normal operational messages:
+    - Component initialization
+    - Configuration loading
+    - Data statistics (nodes/edges loaded)
+    ```
+    2026-03-03 14:23:45 - __main__ - INFO - Connecting to Neo4j...
+    2026-03-03 14:23:46 - __main__ - INFO - Loaded 25 nodes and 48 edges from Docker Compose
+    ```
+  </Tab>
+  
+  <Tab title="WARNING">
+    Non-critical issues that don't prevent operation:
+    - Configuration validation warnings
+    - Missing optional features
+    ```
+    2026-03-03 14:23:47 - __main__ - WARNING - Configuration validation found issues, but continuing...
+    ```
+  </Tab>
+  
+  <Tab title="ERROR">
+    Critical failures:
+    - Missing environment variables
+    - Database connection failures
+    - Configuration parsing errors
+    ```
+    2026-03-03 14:23:48 - __main__ - ERROR - Failed to connect to Neo4j: Connection refused
+    ```
+  </Tab>
+</Tabs>
+
+### Viewing Logs
+
+<CodeGroup>
+```bash Docker Compose
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f ekg-app
+
+# Last 100 lines
+docker-compose logs --tail=100 ekg-app
+```
+
+```bash Neo4j Logs
+# Neo4j logs are stored in named volume
+docker-compose exec neo4j cat /logs/neo4j.log
+
+# Or access via volume mount
+docker volume inspect engineering-knowledge-graph_neo4j_logs
+```
+</CodeGroup>
+
+## Docker Health Checks
+
+### Neo4j Health Check
+
+The Neo4j service includes a built-in health check in `docker-compose.yml`:
+
+```yaml docker-compose.yml:15-19
+healthcheck:
+  test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+```
+
+This ensures Neo4j is ready before dependent services start.
+
+### Checking Service Health
+
+```bash
+# View service health status
+docker-compose ps
+
+# Output shows health status
+NAME                SERVICE   STATUS          PORTS
+neo4j               neo4j     Up (healthy)    7474/tcp, 7687/tcp
+ekg-app             ekg-app   Up              8000/tcp
+```
+
+## Monitoring Metrics
+
+### Key Metrics to Track
+
+<CardGroup cols={2}>
+  <Card title="Request Latency" icon="clock">
+    Monitor API endpoint response times:
+    - `/api/query`: Query processing time
+    - `/api/entities`: Entity retrieval time
+    - `/api/health`: Health check response time
+  </Card>
+  
+  <Card title="Error Rate" icon="triangle-exclamation">
+    Track HTTP error responses:
+    - 500 errors: System failures
+    - 503 errors: Service unavailable
+    - Query parsing failures
+  </Card>
+  
+  <Card title="Neo4j Performance" icon="database">
+    Monitor database metrics:
+    - Connection pool usage
+    - Query execution time
+    - Graph size (nodes/edges)
+  </Card>
+  
+  <Card title="Resource Usage" icon="server">
+    Track container resources:
+    - CPU usage
+    - Memory consumption
+    - Disk space (Neo4j volumes)
+  </Card>
+</CardGroup>
+
+### Docker Stats
+
+Monitor real-time container resource usage:
+
+```bash
+docker stats
+```
+
+Output:
+```
+CONTAINER    CPU %    MEM USAGE / LIMIT     MEM %    NET I/O          BLOCK I/O
+neo4j        2.5%     512MiB / 2GiB        25.6%    1.2MB / 850kB    15MB / 8MB
+ekg-app      1.2%     256MiB / 1GiB        25.0%    850kB / 1.2MB    5MB / 1MB
+```
+
+## Environment Validation
+
+The system validates environment configuration before starting (main.py:23-37):
+
+```python main.py:23-37
+def check_environment():
+    """Check that required environment variables are set."""
+    required_vars = ['GEMINI_API_KEY', 'NEO4J_URI', 'NEO4J_USER', 'NEO4J_PASSWORD']
+    missing_vars = []
+    
+    for var in required_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    if missing_vars:
+        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        logger.error("Please create a .env file based on .env.example")
+        return False
+    
+    return True
+```
+
+<Warning>
+  The application will exit with error code 1 if required environment variables are missing.
+</Warning>
+
+## Configuration Validation
+
+The system includes a comprehensive configuration validator (scripts/validate_config.py) that checks:
+
+- Docker Compose service definitions
+- Team ownership mappings
+- Service dependencies
+- Kubernetes deployment configurations
+
+Run validation manually:
+
+```bash
+python scripts/validate_config.py
+```
+
+Sample output:
+```
+============================================================
+CONFIGURATION VALIDATION RESULTS
+============================================================
+
+⚠️  WARNINGS (2):
+  1. Service 'api-gateway' has no team ownership defined
+  2. Team 'Platform' doesn't own any services
+
+============================================================
+✅ Validation PASSED - Only warnings found
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment" icon="rocket" href="/operations/deployment">
+    Learn about deployment configuration
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Resolve common issues
+  </Card>
+</CardGroup>

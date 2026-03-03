@@ -1,0 +1,597 @@
+---
+title: Querying Guide
+description: Learn how to query the Engineering Knowledge Graph using natural language and APIs
+---
+
+The Engineering Knowledge Graph provides multiple ways to query infrastructure data: natural language queries, REST API endpoints, and direct Cypher queries. This guide covers all query methods.
+
+## Natural Language Queries
+
+The most user-friendly way to query EKG is through natural language using the web interface or API.
+
+### Query Types
+
+EKG understands these query patterns:
+
+| Query Type | Examples | Graph Operation |
+|------------|----------|------------------|
+| **Ownership** | "Who owns payment-service?", "What does the orders team own?" | Find team relationships |
+| **Dependencies** | "What does order-service depend on?", "What uses redis?" | Traverse downstream/upstream |
+| **Blast Radius** | "What breaks if redis-main goes down?", "Impact of users-db failure" | Full dependency analysis |
+| **Path** | "How does api-gateway connect to orders-db?", "Path between services" | Shortest path finding |
+| **List** | "List all services", "Show me all databases", "What teams exist?" | Node enumeration |
+
+### Using the Web Interface
+
+<Steps>
+  <Step title="Open the web interface">
+    Navigate to http://localhost:8000 in your browser.
+  </Step>
+
+  <Step title="Type your query">
+    Enter a natural language query in the chat input:
+    
+    ```
+    What does order-service depend on?
+    ```
+  </Step>
+
+  <Step title="View results">
+    The system will:
+    - Parse your query using Gemini LLM
+    - Execute the appropriate graph query
+    - Return human-readable results
+  </Step>
+</Steps>
+
+### Query Examples
+
+<CodeGroup>
+```text Ownership Query
+Who owns the payment service?
+
+Response:
+The payment-service is owned by the payments-team.
+Team Lead: Frank Wilson
+Slack: #payments
+PagerDuty: payments-oncall
+```
+
+```text Dependency Query
+What does order-service depend on?
+
+Response:
+The order-service depends on:
+- orders-db (database) - distance 1
+- payment-service (service) - distance 1
+- inventory-service (service) - distance 1
+- notification-service (service) - distance 1
+```
+
+```text Blast Radius Query
+What breaks if redis-main goes down?
+
+Response:
+If redis-main fails, it could affect 3 upstream and 0 downstream components, impacting 3 teams:
+
+Upstream dependencies (what depends on this):
+- auth-service (distance 1)
+- inventory-service (distance 1)
+- notification-service (distance 1)
+
+Affected teams:
+- identity-team
+- orders-team
+- platform-team
+```
+
+```text Path Query
+How does api-gateway connect to orders-db?
+
+Response:
+Path found (length 2):
+api-gateway (service) --calls-> order-service (service) --uses-> orders-db (database)
+```
+
+```text List Query
+List all services
+
+Response:
+Found 7 services:
+- api-gateway (platform-team)
+- auth-service (identity-team)
+- order-service (orders-team)
+- payment-service (payments-team)
+- inventory-service (orders-team)
+- notification-service (platform-team)
+- recommendation-service (ml-team)
+```
+</CodeGroup>
+
+## REST API Queries
+
+Query the knowledge graph programmatically using the REST API.
+
+### POST /api/query
+
+Process a natural language query:
+
+<CodeGroup>
+```bash Request
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What does auth-service depend on?",
+    "session_id": "user-123"
+  }'
+```
+
+```json Response
+{
+  "response": "The auth-service depends on:\n- users-db (database) - distance 1\n- redis-main (cache) - distance 1",
+  "query_type": "downstream",
+  "confidence": 0.95,
+  "raw_result": [
+    {
+      "id": "database:users-db",
+      "type": "database",
+      "name": "users-db",
+      "distance": 1,
+      "team": "identity-team"
+    },
+    {
+      "id": "cache:redis-main",
+      "type": "cache",
+      "name": "redis-main",
+      "distance": 1,
+      "team": "platform-team"
+    }
+  ]
+}
+```
+</CodeGroup>
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | Yes | Natural language query |
+| `session_id` | string | No | Session identifier for context (default: "default") |
+
+**Response:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `response` | string | Human-readable response |
+| `query_type` | string | Detected query type (downstream, upstream, blast_radius, path, owner, list) |
+| `confidence` | float | Confidence score (0.0-1.0) |
+| `raw_result` | array/object | Raw graph query results |
+
+### GET /api/entities
+
+Get available entities for autocomplete:
+
+<CodeGroup>
+```bash Request
+curl http://localhost:8000/api/entities
+```
+
+```json Response
+{
+  "services": [
+    "api-gateway",
+    "auth-service",
+    "order-service",
+    "payment-service",
+    "inventory-service",
+    "notification-service",
+    "recommendation-service"
+  ],
+  "databases": [
+    "users-db",
+    "orders-db",
+    "payments-db",
+    "inventory-db"
+  ],
+  "caches": [
+    "redis-main"
+  ],
+  "teams": [
+    "platform-team",
+    "identity-team",
+    "orders-team",
+    "payments-team",
+    "ml-team"
+  ]
+}
+```
+</CodeGroup>
+
+### POST /api/reload
+
+Reload configuration data from files:
+
+<CodeGroup>
+```bash Request
+curl -X POST http://localhost:8000/api/reload
+```
+
+```json Response
+{
+  "message": "Data reloaded successfully"
+}
+```
+</CodeGroup>
+
+### GET /api/health
+
+Check system health:
+
+<CodeGroup>
+```bash Request
+curl http://localhost:8000/api/health
+```
+
+```json Response
+{
+  "status": "healthy",
+  "components": {
+    "storage": true,
+    "query_engine": true,
+    "query_parser": true,
+    "neo4j": true
+  }
+}
+```
+</CodeGroup>
+
+## Query Engine Methods
+
+The `QueryEngine` class provides programmatic access to graph operations.
+
+### Downstream Dependencies
+
+Find what a service depends on:
+
+<CodeGroup>
+```python Python
+from graph.query import QueryEngine
+from graph.storage import GraphStorage
+
+storage = GraphStorage()
+query_engine = QueryEngine(storage)
+
+# Get downstream dependencies
+result = query_engine.downstream(
+    node_id="service:order-service",
+    max_depth=10,
+    edge_types=['depends_on', 'uses', 'calls']
+)
+
+for dep in result:
+    print(f"{dep['name']} ({dep['type']}) - distance {dep['distance']}")
+```
+
+```text Output
+orders-db (database) - distance 1
+payment-service (service) - distance 1
+inventory-service (service) - distance 1
+notification-service (service) - distance 1
+payments-db (database) - distance 2
+inventory-db (database) - distance 2
+```
+</CodeGroup>
+
+**Method Signature:**
+
+```python graph/query.py
+def downstream(
+    self, 
+    node_id: str, 
+    max_depth: int = 10, 
+    edge_types: List[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get all transitive dependencies (what this node depends on).
+    
+    Args:
+        node_id: Starting node ID (format: "type:name")
+        max_depth: Maximum traversal depth to prevent infinite loops (default: 10)
+        edge_types: Optional list of edge types to follow (e.g., ['uses', 'calls'])
+        
+    Returns:
+        List of dependency nodes with distance from start
+    """
+```
+
+### Upstream Dependencies
+
+Find what depends on a service:
+
+<CodeGroup>
+```python Python
+# Get upstream dependencies
+result = query_engine.upstream(
+    node_id="database:orders-db",
+    max_depth=10
+)
+
+for dep in result:
+    print(f"{dep['name']} ({dep['type']}) - distance {dep['distance']}")
+```
+
+```text Output
+order-service (service) - distance 1
+api-gateway (service) - distance 2
+```
+</CodeGroup>
+
+### Blast Radius Analysis
+
+Get full impact analysis:
+
+<CodeGroup>
+```python Python
+# Analyze blast radius
+result = query_engine.blast_radius(
+    node_id="cache:redis-main",
+    max_depth=10
+)
+
+print(f"Summary: {result['summary']}")
+print(f"\nAffected teams: {', '.join(result['affected_teams'])}")
+print(f"\nUpstream dependencies: {len(result['upstream_dependencies'])}")
+for dep in result['upstream_dependencies']:
+    print(f"  - {dep['name']} ({dep['type']})")
+```
+
+```text Output
+Summary: If redis-main fails, it could affect 3 upstream and 0 downstream components, impacting 3 teams.
+
+Affected teams: identity-team, orders-team, platform-team
+
+Upstream dependencies: 3
+  - auth-service (service)
+  - inventory-service (service)
+  - notification-service (service)
+```
+</CodeGroup>
+
+**Method Signature:**
+
+```python graph/query.py
+def blast_radius(self, node_id: str, max_depth: int = 10) -> Dict[str, Any]:
+    """
+    Full impact analysis - upstream + downstream + affected teams.
+    
+    Args:
+        node_id: Starting node ID
+        max_depth: Maximum traversal depth
+        
+    Returns:
+        Dict with keys:
+        - center_node: The starting node
+        - upstream_dependencies: What depends on this
+        - downstream_dependencies: What this depends on
+        - affected_teams: Teams that own affected components
+        - total_affected_nodes: Total number of affected nodes
+        - summary: Human-readable summary
+    """
+```
+
+### Path Finding
+
+Find shortest path between two nodes:
+
+<CodeGroup>
+```python Python
+# Find path between nodes
+result = query_engine.path(
+    from_id="service:api-gateway",
+    to_id="database:orders-db",
+    max_depth=10
+)
+
+print(f"Path length: {result['path_length']}")
+print(f"Description: {result['path_description']}")
+
+for i, node in enumerate(result['nodes']):
+    print(f"{i+1}. {node['name']} ({node['type']})")
+```
+
+```text Output
+Path length: 2
+Description: api-gateway (service) --calls-> order-service (service) --uses-> orders-db (database)
+
+1. api-gateway (service)
+2. order-service (service)
+3. orders-db (database)
+```
+</CodeGroup>
+
+### Team Ownership
+
+Find who owns a service:
+
+<CodeGroup>
+```python Python
+# Get service owner
+owner = query_engine.get_owner("service:payment-service")
+
+if owner:
+    print(f"Owner: {owner['name']}")
+    print(f"Lead: {owner.get('lead', 'N/A')}")
+    print(f"Slack: {owner.get('slack_channel', 'N/A')}")
+```
+
+```text Output
+Owner: payments-team
+Lead: Frank Wilson
+Slack: #payments
+```
+</CodeGroup>
+
+### Team Assets
+
+Get all assets owned by a team:
+
+<CodeGroup>
+```python Python
+# Get team's assets
+assets = query_engine.get_team_assets("orders-team")
+
+print(f"The orders-team owns {len(assets)} assets:")
+for asset in assets:
+    print(f"  - {asset['name']} ({asset['type']})")
+```
+
+```text Output
+The orders-team owns 4 assets:
+  - order-service (service)
+  - inventory-service (service)
+  - orders-db (database)
+  - inventory-db (database)
+```
+</CodeGroup>
+
+## Direct Cypher Queries
+
+For advanced use cases, execute Cypher queries directly against Neo4j.
+
+### Using the Query Engine
+
+<CodeGroup>
+```python Python
+from graph.storage import GraphStorage
+
+storage = GraphStorage()
+
+# Execute custom Cypher query
+query = """
+MATCH (s:service)-[:USES]->(db)
+WHERE db.type IN ['database', 'cache']
+RETURN s.name as service, db.name as database, db.type as db_type
+ORDER BY service
+"""
+
+results = storage.execute_cypher(query)
+
+for record in results:
+    print(f"{record['service']} uses {record['database']} ({record['db_type']})")
+```
+
+```text Output
+auth-service uses users-db (database)
+auth-service uses redis-main (cache)
+inventory-service uses inventory-db (database)
+inventory-service uses redis-main (cache)
+notification-service uses redis-main (cache)
+order-service uses orders-db (database)
+payment-service uses payments-db (database)
+```
+</CodeGroup>
+
+### Common Cypher Patterns
+
+<CodeGroup>
+```cypher Find all services with no dependencies
+MATCH (s {type: 'service'})
+WHERE NOT (s)-[:DEPENDS_ON|USES|CALLS]->()
+RETURN s.name
+```
+
+```cypher Find circular dependencies
+MATCH path = (s1)-[:CALLS*]->(s2)-[:CALLS*]->(s1)
+WHERE s1.type = 'service' AND s2.type = 'service'
+RETURN [n in nodes(path) | n.name] as cycle
+```
+
+```cypher Find most depended-on services
+MATCH (n)<-[r]-() 
+WHERE n.type IN ['service', 'database', 'cache']
+RETURN n.name, n.type, count(r) as dependents
+ORDER BY dependents DESC
+LIMIT 10
+```
+
+```cypher Find services without team ownership
+MATCH (n) 
+WHERE n.type IN ['service', 'database', 'cache']
+  AND NOT (n)<-[:OWNS]-()
+RETURN n.name, n.type
+```
+</CodeGroup>
+
+## Query Performance
+
+### Depth Limits
+
+All graph traversal queries have configurable depth limits to prevent infinite loops:
+
+```python
+# Default max_depth is 10
+result = query_engine.downstream("service:api-gateway", max_depth=5)
+```
+
+<Warning>
+  Increase `max_depth` cautiously. Deep traversals on large graphs can be slow. Most queries need max_depth of 3-5.
+</Warning>
+
+### Edge Type Filtering
+
+Filter by edge types to speed up queries:
+
+```python
+# Only follow USES edges (database connections)
+result = query_engine.downstream(
+    "service:order-service",
+    edge_types=['uses']
+)
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Use specific queries">
+    Be specific in natural language queries:
+    
+    - Good: "What does order-service depend on?"
+    - Bad: "Tell me about orders"
+  </Step>
+
+  <Step title="Check confidence scores">
+    Low confidence (less than 0.5) means the query may have been misunderstood:
+    
+    ```python
+    if response['confidence'] < 0.5:
+        print("Did you mean: ...?")
+    ```
+  </Step>
+
+  <Step title="Cache frequently used queries">
+    Cache results for common queries to reduce load:
+    
+    ```python
+    from functools import lru_cache
+    
+    @lru_cache(maxsize=100)
+    def get_team_services(team_name: str):
+        return query_engine.get_team_assets(team_name)
+    ```
+  </Step>
+
+  <Step title="Use appropriate query types">
+    Choose the right method for your use case:
+    
+    - **Blast radius**: For incident response
+    - **Downstream**: For dependency analysis
+    - **Upstream**: For impact assessment
+    - **Path**: For understanding connections
+  </Step>
+</Steps>
+
+## Next Steps
+
+- [Create custom connectors](/guides/custom-connectors) to add more data sources
+- [Configure the system](/guides/configuration) for production use
+- Explore the [API Reference](/api/overview) for detailed endpoint documentation

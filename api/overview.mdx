@@ -1,0 +1,154 @@
+---
+title: REST API overview
+description: Overview of the Engineering Knowledge Graph REST API endpoints
+---
+
+The Engineering Knowledge Graph exposes a REST API built with FastAPI for querying and managing the knowledge graph.
+
+## Base URL
+
+When running locally with Docker:
+
+```
+http://localhost:8000
+```
+
+## Authentication
+
+The current version does not require authentication. In production deployments, you should add authentication middleware to protect the API endpoints.
+
+<Warning>
+  This API is designed for internal use within trusted environments. Add authentication before exposing to untrusted networks.
+</Warning>
+
+## Available Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Query" icon="message-question" href="/api/query">
+    Process natural language queries
+  </Card>
+  <Card title="Entities" icon="list" href="/api/entities">
+    Get available entities for autocomplete
+  </Card>
+  <Card title="Reload" icon="rotate" href="/api/reload">
+    Reload configuration data
+  </Card>
+  <Card title="Health" icon="heart-pulse" href="/api/health">
+    System health check
+  </Card>
+</CardGroup>
+
+## Common Response Formats
+
+### Success Response
+
+All successful API responses return JSON with appropriate status codes:
+
+```json
+{
+  "response": "Query result or message",
+  "query_type": "downstream",
+  "confidence": 0.95
+}
+```
+
+### Error Response
+
+Errors return standard HTTP status codes with detail messages:
+
+```json
+{
+  "detail": "Error description"
+}
+```
+
+## Status Codes
+
+- `200` - Success
+- `500` - Internal server error
+
+## Request Format
+
+All POST requests accept JSON payloads with `Content-Type: application/json` header.
+
+## Example Usage
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What does order-service depend on?", "session_id": "demo"}'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/api/query",
+    json={
+        "query": "What does order-service depend on?",
+        "session_id": "demo"
+    }
+)
+
+result = response.json()
+print(result['response'])
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:8000/api/query', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    query: 'What does order-service depend on?',
+    session_id: 'demo'
+  })
+});
+
+const result = await response.json();
+console.log(result.response);
+```
+
+</CodeGroup>
+
+## FastAPI Documentation
+
+The API also exposes interactive documentation at:
+
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+
+These provide interactive API testing and detailed schema documentation.
+
+## Rate Limiting
+
+<Info>
+  The current version does not implement rate limiting. Consider adding rate limiting middleware for production use.
+</Info>
+
+## CORS
+
+CORS is not configured by default. Add CORS middleware if you need to access the API from web applications:
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Query Endpoint" icon="message-question" href="/api/query">
+    Learn about natural language queries
+  </Card>
+  <Card title="Query Engine" icon="diagram-project" href="/api/query-engine/overview">
+    Explore the Python query engine
+  </Card>
+</CardGroup>

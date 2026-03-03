@@ -1,80 +1,424 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Get the Engineering Knowledge Graph running locally in under 5 minutes
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
+Before you begin, ensure you have:
 
-### Step 1: Set up your local environment
+<CardGroup cols={2}>
+  <Card title="Docker & Docker Compose" icon="docker">
+    Version 20.10+ with Docker Compose v2
+  </Card>
+  <Card title="Google Gemini API key" icon="key">
+    Free API key from [Google AI Studio](https://aistudio.google.com/app/api-keys)
+  </Card>
+</CardGroup>
+
+<Info>
+  **No Python installation required!** Everything runs in Docker containers.
+</Info>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/truthixify/ekg
+    cd ekg
+    ```
+  </Step>
+
+  <Step title="Configure environment variables">
+    Copy the example environment file and add your Gemini API key:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit `.env` and set your API key:
+    
+    ```bash .env
+    GEMINI_API_KEY=your_gemini_api_key_here
+    NEO4J_URI=bolt://localhost:7687
+    NEO4J_USER=neo4j
+    NEO4J_PASSWORD=password
+    ```
+    
+    <Warning>
+      Keep your `.env` file secure and never commit it to version control. The `.gitignore` file already excludes it.
+    </Warning>
+  </Step>
+
+  <Step title="Start the system">
+    Launch Neo4j and the EKG application:
+    
+    ```bash
+    docker-compose up
+    ```
+    
+    This will:
+    - Start Neo4j graph database on ports 7474 (web UI) and 7687 (bolt)
+    - Parse configuration files from the `data/` directory
+    - Build the knowledge graph
+    - Start the web interface at http://localhost:8000
+    
+    <Note>
+      First startup takes 1-2 minutes while Docker builds the images and Neo4j initializes.
+    </Note>
+  </Step>
+
+  <Step title="Verify the installation">
+    Check that all services are healthy:
+    
+    ```bash
+    curl http://localhost:8000/api/health
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "status": "healthy",
+      "components": {
+        "storage": true,
+        "query_engine": true,
+        "query_parser": true,
+        "neo4j": true
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Your first query
+
+Now that EKG is running, let's explore the system with natural language queries.
+
+### Using the web interface
+
+Open http://localhost:8000 in your browser and try these queries:
+
+<CodeGroup>
+```text Ownership query
+Who owns the payment service?
+```
+
+```text Dependency query
+What does order-service depend on?
+```
+
+```text Blast radius query
+What breaks if redis-main goes down?
+```
+
+```text Path query
+How does api-gateway connect to orders-db?
+```
+</CodeGroup>
+
+### Using the API
+
+You can also query via the REST API:
+
+```bash
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What does order-service depend on?",
+    "session_id": "demo"
+  }'
+```
+
+<Accordion title="Example response">
+```json
+{
+  "response": "The order-service depends on:\n\n• orders-db (database) - PostgreSQL database for orders\n• payment-service (service) - Processes payments\n• inventory-service (service) - Manages inventory\n• notification-service (service) - Sends notifications\n\nOwned by: orders-team (oncall: @dave)",
+  "query_type": "downstream",
+  "confidence": 0.95,
+  "raw_result": [
+    {
+      "id": "database:orders-db",
+      "type": "database",
+      "name": "orders-db",
+      "distance": 1
+    },
+    {
+      "id": "service:payment-service",
+      "type": "service",
+      "name": "payment-service",
+      "distance": 1
+    }
+  ]
+}
+```
+</Accordion>
+
+## Understanding the data
+
+EKG parsed the sample configuration files in the `data/` directory:
+
+### Docker Compose services
+
+The system loaded 7 services from `data/docker-compose.yml`:
+
+<CodeGroup>
+```yaml api-gateway
+api-gateway:
+  build: ./services/api-gateway
+  ports:
+    - "8080:8080"
+  environment:
+    - AUTH_SERVICE_URL=http://auth-service:8081
+    - ORDER_SERVICE_URL=http://order-service:8082
+    - PAYMENT_SERVICE_URL=http://payment-service:8083
+  depends_on:
+    - auth-service
+    - order-service
+    - payment-service
+  labels:
+    team: platform-team
+    oncall: "@alice"
+```
+
+```yaml payment-service
+payment-service:
+  build: ./services/payment-service
+  ports:
+    - "8083:8083"
+  environment:
+    - DATABASE_URL=postgresql://postgres:secret@payments-db:5432/payments
+    - NOTIFICATION_SERVICE_URL=http://notification-service:8085
+  depends_on:
+    - payments-db
+  labels:
+    team: payments-team
+    oncall: "@frank"
+    pci_compliant: "true"
+```
+</CodeGroup>
+
+EKG extracts:
+- Service names and types
+- Dependencies from `depends_on` and environment variables
+- Team ownership and oncall information from labels
+- Port mappings and configuration
+
+### Team ownership
+
+From `data/teams.yaml`, EKG knows which teams own which services:
+
+```yaml data/teams.yaml
+teams:
+  - name: platform-team
+    contact: "@alice"
+    owns:
+      - api-gateway
+      - notification-service
+      - redis-main
+  
+  - name: payments-team
+    contact: "@frank"
+    owns:
+      - payment-service
+      - payments-db
+```
+
+## Exploring the graph
+
+You can visualize the knowledge graph in Neo4j Browser:
+
+<Steps>
+  <Step title="Open Neo4j Browser">
+    Navigate to http://localhost:7474
+    
+    Login with:
+    - Username: `neo4j`
+    - Password: `password`
+  </Step>
+
+  <Step title="Run Cypher queries">
+    Try these queries to explore the graph:
+    
+    ```cypher
+    // Show all services
+    MATCH (n {type: 'service'})
+    RETURN n
+    LIMIT 25
+    ```
+    
+    ```cypher
+    // Show service dependencies
+    MATCH (s {type: 'service'})-[r]->(d)
+    RETURN s, r, d
+    LIMIT 50
+    ```
+    
+    ```cypher
+    // Show team ownership
+    MATCH (t {type: 'team'})-[:OWNS]->(asset)
+    RETURN t, asset
+    ```
+  </Step>
+</Steps>
+
+## Example queries to try
+
+Now that you understand the data, try these natural language queries:
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+  <Accordion title="Ownership queries">
+    - "Who owns the payment service?"
+    - "What does the orders team own?"
+    - "Who should I page if orders-db is down?"
+    - "List all teams"
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+
+  <Accordion title="Dependency queries">
+    - "What does order-service depend on?"
+    - "What services use redis-main?"
+    - "What databases does the orders team manage?"
+    - "Show me everything that depends on auth-service"
+  </Accordion>
+
+  <Accordion title="Blast radius queries">
+    - "What breaks if redis-main goes down?"
+    - "What's the blast radius of users-db?"
+    - "If auth-service fails, what's affected?"
+    - "What teams are impacted if payments-db fails?"
+  </Accordion>
+
+  <Accordion title="Path queries">
+    - "How does api-gateway connect to orders-db?"
+    - "What's between order-service and notification-service?"
+    - "Show the path from api-gateway to redis-main"
+  </Accordion>
+
+  <Accordion title="Exploration queries">
+    - "List all services"
+    - "Show me all databases"
+    - "What teams are there?"
+    - "Find all cache nodes"
   </Accordion>
 </AccordionGroup>
 
-### Step 2: Deploy your changes
+## Adding your own data
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+To analyze your own infrastructure:
+
+<Steps>
+  <Step title="Replace the sample data">
+    Put your configuration files in the `data/` directory:
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash
+    data/
+    ├── docker-compose.yml    # Your Docker Compose services
+    ├── teams.yaml            # Your team ownership info
+    └── k8s-deployments.yaml  # (Optional) Kubernetes resources
+    ```
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Reload the data">
+    Trigger a reload via the API:
+    
+    ```bash
+    curl -X POST http://localhost:8000/api/reload
+    ```
+    
+    Or restart the Docker containers:
+    
+    ```bash
+    docker-compose restart ekg-app
+    ```
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Verify the new data">
+    Check that your services were loaded:
+    
+    ```bash
+    curl http://localhost:8000/api/entities
+    ```
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card
+    title="Architecture"
+    icon="sitemap"
+    href="/architecture"
+  >
+    Learn how connectors, storage, queries, and chat work together
+  </Card>
+  <Card
+    title="API reference"
+    icon="code"
+    href="/api/overview"
+  >
+    Explore all available API endpoints and query methods
+  </Card>
+  <Card
+    title="Custom Connectors"
+    icon="wrench"
+    href="/guides/custom-connectors"
+  >
+    Build custom connectors for your infrastructure sources
+  </Card>
+  <Card
+    title="Configuration"
+    icon="gear"
+    href="/guides/configuration"
+  >
+    Configure environment variables and system settings
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Container won't start">
+    Check Docker logs:
+    ```bash
+    docker-compose logs ekg-app
+    docker-compose logs neo4j
+    ```
+    
+    Common issues:
+    - Missing `GEMINI_API_KEY` in `.env` file
+    - Port 8000 or 7687 already in use
+    - Insufficient Docker memory (Neo4j needs ~512MB)
+  </Accordion>
+
+  <Accordion title="Health check fails">
+    Wait for Neo4j to fully initialize (30-60 seconds on first start), then check:
+    
+    ```bash
+    docker-compose ps
+    ```
+    
+    All services should show "healthy" status.
+  </Accordion>
+
+  <Accordion title="Queries return no results">
+    Verify data was loaded:
+    
+    ```bash
+    docker-compose logs ekg-app | grep "Total loaded"
+    ```
+    
+    You should see: `Total loaded: X nodes and Y edges`
+    
+    If not, check that your configuration files exist in `data/`.
+  </Accordion>
+
+  <Accordion title="LLM errors">
+    Verify your Gemini API key is valid:
+    
+    ```bash
+    curl https://generativelanguage.googleapis.com/v1/models?key=YOUR_API_KEY
+    ```
+    
+    Check rate limits at [Google AI Studio](https://aistudio.google.com/).
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,395 @@
+---
+title: 'Ownership Methods'
+description: 'Find team ownership and list team assets'
+---
+
+## Overview
+
+The QueryEngine provides two methods for working with team ownership:
+
+- `get_owner()` - Find which team owns a specific node
+- `get_team_assets()` - List all assets owned by a team
+
+These methods are essential for:
+- Identifying responsible teams during incidents
+- Routing issues and questions to the right teams
+- Understanding team responsibilities
+- Audit and compliance reporting
+
+---
+
+## get_owner()
+
+Find the team that owns a given node.
+
+### Method Signature
+
+```python
+def get_owner(node_id: str) -> Optional[Dict[str, Any]]
+```
+
+### Parameters
+
+<ParamField path="node_id" type="str" required>
+  The unique identifier of the node to look up. Should be in the format `type:name` (e.g., `service:payment-api`, `database:users-db`).
+</ParamField>
+
+### Returns
+
+<ResponseField name="team" type="Optional[Dict[str, Any]]">
+  The team node that owns the asset, or `None` if no owner is found.
+  
+  <Expandable title="Team Structure">
+    <ResponseField name="id" type="str">
+      Unique team identifier
+    </ResponseField>
+    
+    <ResponseField name="name" type="str">
+      Team name
+    </ResponseField>
+    
+    <ResponseField name="type" type="str">
+      Always `"team"`
+    </ResponseField>
+    
+    <ResponseField name="..." type="Any">
+      Additional team properties (e.g., `slack_channel`, `email`, `manager`)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Examples
+
+#### Basic Usage
+
+```python
+from graph.query import QueryEngine
+
+query_engine = QueryEngine(storage)
+
+# Find who owns a service
+owner = query_engine.get_owner("service:payment-api")
+
+if owner:
+    print(f"Owner: {owner['name']}")
+    if 'slack_channel' in owner:
+        print(f"Contact: {owner['slack_channel']}")
+else:
+    print("No owner assigned")
+```
+
+#### Incident Response
+
+```python
+# During an incident, find the responsible team
+failing_service = "service:auth-service"
+owner = query_engine.get_owner(failing_service)
+
+if owner:
+    print(f"🚨 INCIDENT ALERT")
+    print(f"Service: {failing_service}")
+    print(f"Responsible Team: {owner['name']}")
+    
+    # Get contact information
+    if 'slack_channel' in owner:
+        print(f"📱 Alert: {owner['slack_channel']}")
+    if 'pagerduty_schedule' in owner:
+        print(f"📟 Page: {owner['pagerduty_schedule']}")
+else:
+    print("⚠️  No owner found - escalating to platform team")
+```
+
+#### Ownership Audit
+
+```python
+# Check ownership coverage
+services = query_engine.get_nodes(node_type="service")
+
+unowned = []
+owned_by_team = {}
+
+for service in services:
+    owner = query_engine.get_owner(service['id'])
+    
+    if owner:
+        team_name = owner['name']
+        if team_name not in owned_by_team:
+            owned_by_team[team_name] = []
+        owned_by_team[team_name].append(service['name'])
+    else:
+        unowned.append(service['name'])
+
+print(f"Ownership Coverage: {len(services) - len(unowned)}/{len(services)}")
+print(f"\n⚠️  Unowned services ({len(unowned)}):")
+for name in unowned:
+    print(f"  - {name}")
+
+print(f"\n✓ Owned services by team:")
+for team, services in owned_by_team.items():
+    print(f"  {team}: {len(services)} services")
+```
+
+#### Routing Issues
+
+```python
+def route_issue(component_id: str, issue_description: str):
+    """Route an issue to the appropriate team."""
+    owner = query_engine.get_owner(component_id)
+    
+    if owner:
+        return {
+            'team': owner['name'],
+            'contact': owner.get('slack_channel', 'No contact info'),
+            'issue': issue_description,
+            'component': component_id
+        }
+    else:
+        return {
+            'team': 'Platform',  # Default escalation
+            'contact': '#platform-team',
+            'issue': issue_description,
+            'component': component_id,
+            'note': 'No owner found - defaulting to platform team'
+        }
+
+# Use it
+routing = route_issue(
+    "database:users-db",
+    "High connection count"
+)
+
+print(f"Route to: {routing['team']}")
+print(f"Contact: {routing['contact']}")
+```
+
+---
+
+## get_team_assets()
+
+Get all assets owned by a specific team.
+
+### Method Signature
+
+```python
+def get_team_assets(team_name: str) -> List[Dict[str, Any]]
+```
+
+### Parameters
+
+<ParamField path="team_name" type="str" required>
+  The name of the team to look up (e.g., `"Platform"`, `"Identity"`, `"Payments"`).
+</ParamField>
+
+### Returns
+
+<ResponseField name="assets" type="List[Dict[str, Any]]">
+  List of all nodes owned by the team, ordered by type and name.
+  
+  <Expandable title="Asset Structure">
+    <ResponseField name="id" type="str">
+      Unique asset identifier
+    </ResponseField>
+    
+    <ResponseField name="name" type="str">
+      Asset name
+    </ResponseField>
+    
+    <ResponseField name="type" type="str">
+      Asset type (e.g., `service`, `database`, `library`)
+    </ResponseField>
+    
+    <ResponseField name="..." type="Any">
+      Additional asset properties depending on type
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Examples
+
+#### Basic Usage
+
+```python
+from graph.query import QueryEngine
+
+query_engine = QueryEngine(storage)
+
+# List all assets owned by a team
+assets = query_engine.get_team_assets("Platform")
+
+print(f"Platform team owns {len(assets)} assets:\n")
+
+for asset in assets:
+    print(f"  [{asset['type']}] {asset['name']}")
+```
+
+#### Output Example
+
+```
+Platform team owns 12 assets:
+
+  [database] postgres-main
+  [database] redis-cache
+  [library] auth-lib
+  [library] logging-lib
+  [service] api-gateway
+  [service] auth-service
+  [service] config-service
+  ...
+```
+
+#### Team Inventory Report
+
+```python
+# Generate a detailed inventory for a team
+team_name = "Identity"
+assets = query_engine.get_team_assets(team_name)
+
+# Group by type
+by_type = {}
+for asset in assets:
+    asset_type = asset['type']
+    if asset_type not in by_type:
+        by_type[asset_type] = []
+    by_type[asset_type].append(asset)
+
+print(f"=== {team_name} Team Asset Inventory ===")
+print(f"\nTotal Assets: {len(assets)}\n")
+
+for asset_type, items in sorted(by_type.items()):
+    print(f"{asset_type.upper()} ({len(items)}):")
+    for item in items:
+        print(f"  - {item['name']}")
+        if 'language' in item:
+            print(f"    Language: {item['language']}")
+        if 'version' in item:
+            print(f"    Version: {item['version']}")
+    print()
+```
+
+#### Team Responsibility Matrix
+
+```python
+# Compare assets across teams
+teams = ["Platform", "Identity", "Payments", "API"]
+
+print("Team Responsibility Matrix:\n")
+print(f"{'Team':<15} {'Services':<10} {'Databases':<12} {'Libraries':<10} {'Total':<8}")
+print("-" * 60)
+
+for team_name in teams:
+    assets = query_engine.get_team_assets(team_name)
+    
+    services = sum(1 for a in assets if a['type'] == 'service')
+    databases = sum(1 for a in assets if a['type'] == 'database')
+    libraries = sum(1 for a in assets if a['type'] == 'library')
+    
+    print(f"{team_name:<15} {services:<10} {databases:<12} {libraries:<10} {len(assets):<8}")
+```
+
+#### Team Blast Radius
+
+```python
+# Find total impact if entire team is unavailable
+team_name = "Platform"
+assets = query_engine.get_team_assets(team_name)
+
+print(f"Impact Analysis: {team_name} Team Unavailable\n")
+
+total_upstream = 0
+affected_teams = set()
+
+for asset in assets:
+    # Get upstream dependencies for each asset
+    upstream = query_engine.upstream(asset['id'], max_depth=5)
+    total_upstream += len(upstream)
+    
+    # Find teams affected
+    for dep in upstream:
+        owner = query_engine.get_owner(dep['id'])
+        if owner and owner['name'] != team_name:
+            affected_teams.add(owner['name'])
+
+print(f"Team owns: {len(assets)} assets")
+print(f"Total upstream dependencies: {total_upstream}")
+print(f"\nOther teams affected: {len(affected_teams)}")
+for team in sorted(affected_teams):
+    print(f"  - {team}")
+```
+
+#### Onboarding Documentation
+
+```python
+# Generate onboarding guide for new team member
+team_name = "API"
+assets = query_engine.get_team_assets(team_name)
+
+print(f"=== Welcome to {team_name} Team! ===")
+print(f"\nYou'll be responsible for {len(assets)} components:\n")
+
+for asset in assets:
+    print(f"\n📦 {asset['name']} ({asset['type']})")
+    print(f"   ID: {asset['id']}")
+    
+    # Show key dependencies
+    deps = query_engine.downstream(asset['id'], max_depth=2)
+    if deps:
+        print(f"   Key dependencies: {', '.join([d['name'] for d in deps[:3]])}")
+    
+    # Show main consumers
+    consumers = query_engine.upstream(asset['id'], max_depth=1)
+    if consumers:
+        print(f"   Used by: {', '.join([c['name'] for c in consumers[:3]])}")
+```
+
+#### Check Team Overlap
+
+```python
+# Find assets with multiple owners (should not happen)
+all_nodes = query_engine.get_nodes()
+
+multiple_owners = []
+
+for node in all_nodes:
+    # This query finds ALL teams that own a node
+    query = """
+    MATCH (team {type: 'team'})-[:OWNS]->(node {id: $node_id})
+    RETURN team
+    """
+    owners = query_engine.storage.execute_cypher(query, {'node_id': node['id']})
+    
+    if len(owners) > 1:
+        multiple_owners.append({
+            'asset': node['name'],
+            'owners': [dict(o['team'])['name'] for o in owners]
+        })
+
+if multiple_owners:
+    print(f"⚠️  Found {len(multiple_owners)} assets with multiple owners:")
+    for item in multiple_owners:
+        print(f"  {item['asset']}: {', '.join(item['owners'])}")
+else:
+    print("✓ No ownership conflicts found")
+```
+
+## Use Cases
+
+### get_owner()
+- Incident response routing
+- Issue assignment
+- Code review assignments
+- Compliance audits
+- Change approval workflows
+
+### get_team_assets()
+- Team inventory management
+- Onboarding documentation
+- Responsibility tracking
+- Resource allocation
+- Team capacity planning
+- Cost attribution
+
+## See Also
+
+- [blast_radius()](/api/query-engine/blast-radius) - Includes affected teams in impact analysis
+- [upstream()](/api/query-engine/upstream) - Find dependents of team assets
+- [downstream()](/api/query-engine/downstream) - Find dependencies of team assets

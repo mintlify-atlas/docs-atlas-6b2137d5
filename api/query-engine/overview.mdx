@@ -1,0 +1,87 @@
+---
+title: 'QueryEngine'
+description: 'Graph query engine for complex traversals and analysis operations'
+---
+
+## Overview
+
+The `QueryEngine` class provides powerful graph traversal and analysis capabilities for the Engineering Knowledge Graph. It enables you to explore relationships, find dependencies, analyze impact, and understand ownership across your engineering assets.
+
+## Initialization
+
+```python
+from graph.query import QueryEngine
+from graph.storage import GraphStorage
+
+# Initialize storage and query engine
+storage = GraphStorage(uri="neo4j://localhost:7687")
+query_engine = QueryEngine(storage)
+```
+
+## Core Capabilities
+
+The QueryEngine provides several categories of operations:
+
+### Dependency Analysis
+- **Downstream dependencies**: Find what a node depends on
+- **Upstream dependencies**: Find what depends on a node
+- **Blast radius**: Full impact analysis including affected teams
+
+### Path Finding
+- **Shortest path**: Find connections between any two nodes
+
+### Ownership
+- **Get owner**: Find the team that owns an asset
+- **Get team assets**: List all assets owned by a team
+
+## Basic Usage
+
+```python
+# Get downstream dependencies
+deps = query_engine.downstream(
+    node_id="service:payment-api",
+    max_depth=5
+)
+
+# Find impact of a change
+impact = query_engine.blast_radius(
+    node_id="database:users-db",
+    max_depth=10
+)
+
+# Find ownership
+owner = query_engine.get_owner(node_id="service:auth-service")
+```
+
+## Method Reference
+
+<CardGroup cols={2}>
+  <Card title="downstream()" icon="arrow-down" href="/api/query-engine/downstream">
+    Get transitive dependencies
+  </Card>
+  <Card title="upstream()" icon="arrow-up" href="/api/query-engine/upstream">
+    Get transitive dependents
+  </Card>
+  <Card title="blast_radius()" icon="explosion" href="/api/query-engine/blast-radius">
+    Full impact analysis
+  </Card>
+  <Card title="path()" icon="route" href="/api/query-engine/path">
+    Find shortest path between nodes
+  </Card>
+  <Card title="Ownership Methods" icon="users" href="/api/query-engine/ownership">
+    Team ownership operations
+  </Card>
+</CardGroup>
+
+## Return Types
+
+All query methods return standard Python data structures:
+- Node lists return `List[Dict[str, Any]]`
+- Single nodes return `Optional[Dict[str, Any]]`
+- Complex results return `Dict[str, Any]` with structured data
+
+## Performance Considerations
+
+- Use `max_depth` to limit traversal depth and prevent performance issues
+- Filter by `edge_types` to narrow results and improve query speed
+- Large graphs may require tuning of depth parameters

@@ -1,0 +1,154 @@
+---
+title: 'downstream()'
+description: 'Get all transitive dependencies (what this node depends on)'
+---
+
+## Method Signature
+
+```python
+def downstream(
+    node_id: str,
+    max_depth: int = 10,
+    edge_types: List[str] = None
+) -> List[Dict[str, Any]]
+```
+
+## Description
+
+The `downstream()` method traverses the graph to find all nodes that the starting node depends on. This is useful for understanding the complete dependency tree of a service, library, or other asset.
+
+The method performs a depth-first traversal following outgoing edges from the starting node, respecting the maximum depth constraint to prevent infinite loops.
+
+## Parameters
+
+<ParamField path="node_id" type="str" required>
+  The unique identifier of the starting node. Should be in the format `type:name` (e.g., `service:payment-api`, `database:users-db`).
+</ParamField>
+
+<ParamField path="max_depth" type="int" default="10">
+  Maximum traversal depth to prevent infinite loops. Higher values allow deeper traversal but may impact performance on large graphs.
+</ParamField>
+
+<ParamField path="edge_types" type="List[str]" default="None">
+  Optional list of edge types to follow during traversal. If provided, only edges matching these types will be followed. Common edge types include:
+  - `DEPENDS_ON`
+  - `USES`
+  - `IMPORTS`
+  - `CALLS`
+</ParamField>
+
+## Returns
+
+<ResponseField name="dependencies" type="List[Dict[str, Any]]">
+  A list of dependency nodes, each containing:
+  
+  <Expandable title="Node Structure">
+    <ResponseField name="id" type="str">
+      Unique node identifier
+    </ResponseField>
+    
+    <ResponseField name="name" type="str">
+      Human-readable node name
+    </ResponseField>
+    
+    <ResponseField name="type" type="str">
+      Node type (e.g., `service`, `database`, `library`)
+    </ResponseField>
+    
+    <ResponseField name="distance" type="int">
+      Shortest path distance from the starting node
+    </ResponseField>
+    
+    <ResponseField name="..." type="Any">
+      Additional node properties depending on node type
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+Results are ordered by distance (closest first), then by node name alphabetically.
+
+## Examples
+
+### Basic Usage
+
+```python
+from graph.query import QueryEngine
+
+query_engine = QueryEngine(storage)
+
+# Get all dependencies of a service
+dependencies = query_engine.downstream(
+    node_id="service:payment-api"
+)
+
+for dep in dependencies:
+    print(f"{dep['name']} ({dep['type']}) - distance: {dep['distance']}")
+```
+
+### Output Example
+
+```
+users-db (database) - distance: 1
+redis-cache (cache) - distance: 1
+auth-service (service) - distance: 2
+postgres-main (database) - distance: 3
+```
+
+### With Edge Type Filtering
+
+```python
+# Only follow DEPENDS_ON edges
+direct_deps = query_engine.downstream(
+    node_id="service:payment-api",
+    max_depth=5,
+    edge_types=["DEPENDS_ON", "USES"]
+)
+
+print(f"Found {len(direct_deps)} direct dependencies")
+```
+
+### Limited Depth Traversal
+
+```python
+# Only get immediate dependencies (1 level deep)
+immediate_deps = query_engine.downstream(
+    node_id="service:payment-api",
+    max_depth=1
+)
+
+for dep in immediate_deps:
+    print(f"Direct dependency: {dep['name']}")
+```
+
+### Analyzing Dependency Depth
+
+```python
+deps = query_engine.downstream(node_id="service:api-gateway")
+
+# Group by distance
+by_distance = {}
+for dep in deps:
+    distance = dep['distance']
+    if distance not in by_distance:
+        by_distance[distance] = []
+    by_distance[distance].append(dep['name'])
+
+for distance in sorted(by_distance.keys()):
+    print(f"Level {distance}: {len(by_distance[distance])} dependencies")
+    for name in by_distance[distance][:3]:  # Show first 3
+        print(f"  - {name}")
+```
+
+## Use Cases
+
+- **Dependency audits**: Understand what your service relies on
+- **Security analysis**: Identify all dependencies that could introduce vulnerabilities
+- **Migration planning**: Find all components that need to be migrated together
+- **Build optimization**: Analyze dependency chains for build improvements
+- **Technology stack analysis**: Map out technology dependencies
+
+## See Also
+
+- [upstream()](/api/query-engine/upstream) - Find what depends on this node
+- [blast_radius()](/api/query-engine/blast-radius) - Complete impact analysis
+- [path()](/api/query-engine/path) - Find specific paths between nodes
