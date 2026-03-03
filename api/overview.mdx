@@ -9,7 +9,7 @@ The Engineering Knowledge Graph exposes a REST API built with FastAPI for queryi
 
 When running locally with Docker:
 
-```
+```text
 http://localhost:8000
 ```
 
@@ -20,6 +20,16 @@ The current version does not require authentication. In production deployments, 
 <Warning>
   This API is designed for internal use within trusted environments. Add authentication before exposing to untrusted networks.
 </Warning>
+
+## Web Interface
+
+The system includes a web-based chat interface:
+
+```http
+GET /
+```
+
+This serves an HTML interface for interactive natural language queries. Access it at `http://localhost:8000` when running locally.
 
 ## Available Endpoints
 
